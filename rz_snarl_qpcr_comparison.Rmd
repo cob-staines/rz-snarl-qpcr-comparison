@@ -1,0 +1,83 @@
+---
+title: "rz_snarl_qpcr_comparison"
+author: "Cob Staines"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# setup
+```{r setup, echo=FALSE}
+librarian::shelf(tidyverse, dbplyr, here, janitor, rio, RPostgres, DBI, RIBBiTR-BII/ribbitrrr)
+
+wddir = here(Sys.getenv("data_dir"), "bd_qpcr_results", "rz_snarl_qpcr_comparison")
+
+dbcon = hopToDB("railway")
+
+```
+
+# load data
+```{r load, echo=FALSE}
+list.files(wddir)
+
+snarl_raw = import(here(wddir, "qpcr_compare_data_260904.xlsx"),
+                   na = c("NA", "NaN"))
+rz_raw = import(here(wddir, "RIBBiTR_SierraNevadaComparision_04012026_Plate1_rerun2_Diluted_results.xlsx"),
+                which = "WorkingResults")
+
+# pointer tables
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+
+rz_db = db_bd %>%
+  filter(sample_name_bd %in% snarl_raw$bd_swab_id) %>%
+  collect()
+  
+```
+
+
+```{r clean, echo=FALSE}
+snarl_clean = snarl_raw %>%
+  clean_names() %>%
+  rename(extraction_lab = lab_extract,
+         extraction_method = extract_method,
+         qpcr_lab = lab_qpcr,
+         bd_quant_cycle = quant_cycle,
+         bd_start_quant = start_quant) %>%
+  mutate(extraction_lab = recode_values(extraction_lab,
+                                        "pitt" ~ "rz_lab",
+                                        default = extraction_lab),
+         collect_lab = recode_values(collect_lab,
+                                     "pitt" ~ "rz_lab",
+                                     default = collect_lab))
+
+frog_lookup = snarl_clean %>%
+  select(frog_num,
+         bd_swab_id,
+         species_capture,
+         collect_lab) %>%
+  distinct()
+
+rz_clean = rz_db %>%
+  rename(bd_swab_id = sample_name_bd,
+         bd_quant_cycle = bd_cycle_quant,
+         bd_start_quant = bd_target_quant,
+         bd_load = bd_its1_copies_per_swab,
+         notes = comments_qpcr) %>%
+  mutate(qpcr_lab = "rz_lab",
+         extraction_lab = "rz_lab",
+         extraction_method = "qiagen") %>%
+  left_join(frog_lookup, by = "bd_swab_id") %>%
+  select(all_of(colnames(snarl_clean)))
+
+alligned_clean = bind_rows(snarl_clean,
+                           rz_clean)
+
+```
+
+# summary stats
+```{r summary}
+
+peace = alligned_clean %>%
+  group_by(frog_num,
+           species_capture) %>%
+  count()
+```
