@@ -1,0 +1,199 @@
+---
+title: "rz_snarl_qpcr_comparison"
+author: "Cob Staines"
+format: html
+editor: visual
+---
+
+# RZ-SNARL qPCR Comparison
+
+**Objective**: Quantify diferences in Bd qPCR quantities between extraction and qPCR methods between RZ and SNARL labs.
+
+
+## Setup
+Load packages, set up working directory, establish database connection
+```{r setup}
+#| code-fold: true
+#| code-summary: "Show Setup code"
+#| results: hide
+librarian::shelf(tidyverse, dbplyr, here, janitor, rio, ggplot2, knitr, kableExtra, RPostgres, DBI, RIBBiTR-BII/ribbitrrr)
+
+wddir = here(Sys.getenv("data_dir"), "bd_qpcr_results", "rz_snarl_qpcr_comparison")
+
+# establish database connection
+dbcon = hopToDB("railway", hopReg = FALSE)
+
+```
+
+## Load data
+- Pull in experiment data from data file: `qpcr_compare_data_260904.xlsx`
+- Pull in replicate data from RIBBiTR database
+```{r}
+# load data
+snarl_raw = import(here(wddir, "qpcr_compare_data_260904.xlsx"),
+                   na = c("NA", "NaN"))
+
+# replicates from database
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+
+bd_replicates = db_bd %>%
+  inner_join(db_sample, by = "sample_id") %>%
+  inner_join(db_capture, by = "capture_id") %>%
+  filter(ipc_pass | is.na(ipc_pass)) %>%
+  group_by(sample_name_bd) %>%
+  mutate(n_results = n()) %>%
+  ungroup() %>%
+  filter(standard_target_type == "ITS1",
+         !is.na(bd_target_quant),
+         !is.na(bd_its1_copies_per_swab),
+         n_results > 1,
+         qpcr_lab %in% c("snarl", "rz_lab")) %>%
+  select(result_id,
+         sample_id,
+         capture_id,
+         sample_name_bd,
+         bd_cycle_quant,
+         bd_target_quant,
+         bd_its1_copies_per_swab,
+         extraction_lab,
+         qpcr_lab,
+         extraction_kit,
+         taxon_capture,
+         comments_qpcr) %>%
+  collect()
+```
+
+## Clean & Pivot
+Clean column names, then pivot Bd load values wide by Frog ID
+```{r clean}
+#| code-fold: true
+#| code-summary: "Show Clean & Pivot code"
+#| 
+snarl_clean = snarl_raw %>%
+  clean_names() %>%
+  rename(extraction_lab = lab_extract,
+         extraction_method = extract_method,
+         qpcr_lab = lab_qpcr,
+         bd_quant_cycle = quant_cycle,
+         bd_start_quant = start_quant,
+         frog_id = frog_num) %>%
+  mutate(extraction_lab = recode_values(extraction_lab,
+                                        "pitt" ~ "rz",
+                                        "snarl" ~ "snarl",
+                                        default = NA),
+         collect_lab = recode_values(collect_lab,
+                                     "pitt" ~ "rz",
+                                        "snarl" ~ "snarl",
+                                        default = NA),
+         qpcr_lab = recode_values(qpcr_lab,
+                                     "pitt" ~ "rz",
+                                        "snarl" ~ "snarl",
+                                        default = NA),
+         src = "snarl")
+
+snarl_wide = snarl_clean %>%
+  pivot_wider(id_cols = c("frog_id", "collect_lab"),
+              names_from = c("extraction_method", "qpcr_lab"),
+              values_from = "bd_load")
+
+replicates_clean = bd_replicates %>%
+  rename(bd_swab_id = sample_name_bd,
+         bd_quant_cycle = bd_cycle_quant,
+         bd_start_quant = bd_target_quant,
+         bd_load = bd_its1_copies_per_swab,
+         notes = comments_qpcr) %>%
+  mutate(extraction_lab = recode_values(extraction_lab,
+                                        "rz_lab" ~ "rz",
+                                        default = extraction_lab),
+         qpcr_lab = recode_values(qpcr_lab,
+                                  "rz_lab" ~ "rz",
+                                  default = qpcr_lab),
+         extraction_method = recode_values(extraction_kit,
+                                          "qiagen_dneasy" ~ "qiagen",
+                                          default = extraction_kit),
+         collect_lab = qpcr_lab,
+         frog_id = bd_swab_id,
+         src = "db",
+         species_capture = str_to_sentence(gsub("_", " ", taxon_capture))) %>%
+  select(all_of(colnames(snarl_clean))) %>%
+  group_by(bd_swab_id) %>%
+  mutate(replicate_id = row_number()) %>%
+  ungroup()
+
+replicates_wide = replicates_clean %>%
+  pivot_wider(id_cols = c("frog_id", "collect_lab", "extraction_method", "qpcr_lab"),
+              names_from = c("replicate_id"),
+              values_from = "bd_load")
+
+# snarl_wide_dat = snarl_wide %>%
+#   select(-frog_id,
+#          -collect_lab)
+
+kable(snarl_wide, digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                full_width = TRUE,
+                font_size = 12,
+                fixed_thead = TRUE) %>%
+  scroll_box(height = "400px")
+
+```
+
+## Data Summary
+```{r summary}
+#| code-fold: true
+#| code-summary: "Show Data Summary code"
+#| fig-width: 5
+#| fig-height: 5
+#| 
+nice <- c(qiagen_rz = "Qiagen-RZ", qiagen_snarl = "Qiagen-SNARL",
+          prepman_rz = "PrepMan-RZ", prepman_snarl = "PrepMan-SNARL")
+
+# One row per panel; x/y orientation is set here
+pairs <- tribble(
+  ~letter, ~xvar,      ~yvar,
+  "A",     "qiagen_rz",    "qiagen_snarl",
+  "B",     "prepman_rz", "prepman_snarl",
+  "C",     "qiagen_rz",    "prepman_rz",     # flipped from your version
+  "D",     "qiagen_snarl", "prepman_snarl",
+  "E",     "qiagen_rz",    "prepman_snarl"   # flipped from your version
+)
+
+# Stack all pairs into one long data frame
+plot_df <- pmap_dfr(pairs, function(letter, xvar, yvar) {
+  xv <- snarl_wide[[xvar]]
+  yv <- snarl_wide[[yvar]]
+  tibble(letter = letter, xvar = xvar, yvar = yvar, x = xv, y = yv)
+}) %>%
+  filter(!is.na(x), !is.na(y)) %>%
+  mutate(xvar = factor(nice[xvar], levels = nice[1:3]),
+         yvar = factor(nice[yvar], levels = nice[2:4]))
+
+# Per-panel stats (on raw loads)
+stats_df <- plot_df %>%
+  group_by(letter, xvar, yvar) %>%
+  summarise(n = n(), n_pos = sum(x > 0 & y > 0), .groups = "drop") %>%
+  mutate(label = paste0("n = ", n, "\nboth > 0: ", n_pos))
+
+ggplot(plot_df, aes(log10(x + 1), log10(y + 1))) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", colour = "grey50") +
+  geom_point(alpha = 0.6) +
+  # geom_smooth(method = "lm") +
+  geom_text(data = stats_df, aes(x = -Inf, y = Inf, label = letter),
+            hjust = -0.6, vjust = 1.4, fontface = "bold", size = 5,
+            inherit.aes = FALSE) +
+  geom_text(data = stats_df, aes(x = Inf, y = -Inf, label = label),
+            hjust = 1.05, vjust = -0.3, size = 2.75, lineheight = 0.9,
+            inherit.aes = FALSE) +
+  facet_grid(xvar ~ yvar, switch = "both") +
+  coord_fixed() +
+  labs(x = "log10(Bd load + 1)  [extraction method – qPCR lab]",
+       y = "log10(Bd load + 1)  [extraction method – qPCR lab]") +
+  theme_bw() +
+  theme(strip.placement = "outside",
+        strip.background = element_blank(),
+        strip.text = element_text(face = "bold"),
+        panel.grid.minor = element_blank())
+
+```
