@@ -228,3 +228,58 @@ ggplot(plot_df, aes(log10(x + 1), log10(y + 1))) +
         panel.grid.minor = element_blank())
 
 ```
+
+## Replicate Variability
+Within-lab replicate pairs by qPCR lab and replicate type, to assess whether replicate variability is comparable between labs (i.e. whether replicates can be pooled across labs).
+```{r replicates}
+#| code-fold: true
+#| code-summary: "Show Replicate Variability code"
+#| fig-width: 6
+#| fig-height: 6
+
+# All within-group replicate pairs (i < j)
+replicate_long = replicates_clean %>%
+  mutate(pipeline = paste(extraction_method, qpcr_lab, sep = "_")) %>%
+  select(replicate_type, replicate_group, pipeline, qpcr_lab, replicate_id, bd_load)
+
+replicate_pairs = replicate_long %>%
+  inner_join(replicate_long,
+             by = c("replicate_type", "replicate_group", "pipeline", "qpcr_lab"),
+             suffix = c("_x", "_y"),
+             relationship = "many-to-many") %>%
+  filter(replicate_id_x < replicate_id_y) %>%
+  transmute(replicate_type, qpcr_lab, pipeline,
+            x = bd_load_x,
+            y = bd_load_y)
+
+rep_plot_df = replicate_pairs %>%
+  mutate(qpcr_lab = recode_values(qpcr_lab,
+                                  "rz" ~ "RZ qPCR",
+                                  "snarl" ~ "SNARL qPCR",
+                                  default = qpcr_lab),
+         replicate_type = recode_values(replicate_type,
+                                        "qpcr" ~ "qPCR replicates",
+                                        "swab" ~ "Swab replicates",
+                                        default = replicate_type))
+
+rep_stats_df = rep_plot_df %>%
+  group_by(qpcr_lab, replicate_type) %>%
+  summarise(n = n(), n_pos = sum(x > 0 & y > 0), .groups = "drop") %>%
+  mutate(label = paste0("n = ", n, "\nboth > 0: ", n_pos))
+
+ggplot(rep_plot_df, aes(log10(x + 1), log10(y + 1))) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", colour = "grey50") +
+  geom_point(alpha = 0.6) +
+  geom_text(data = rep_stats_df, aes(x = Inf, y = -Inf, label = label),
+            hjust = 1.05, vjust = -0.3, size = 2.75, lineheight = 0.9,
+            inherit.aes = FALSE) +
+  facet_grid(qpcr_lab ~ replicate_type) +
+  coord_fixed() +
+  labs(x = "log10(Bd load + 1)  [replicate i]",
+       y = "log10(Bd load + 1)  [replicate j]") +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold"),
+        panel.grid.minor = element_blank())
+
+```

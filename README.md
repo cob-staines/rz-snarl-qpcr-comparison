@@ -49,4 +49,7 @@ Bd load within a population is generally modeled as a hurdle-lognormal quantity.
 3) Are quantitative outputs from the extraction step significantly different between labs? If not, how do they differ, in the interest of making the results comparable?
 
 ## Files
-- `rz_snarl_qpcr_comparison.qmd`: currently the key data wrangling, modeling, and reporting file. We might split this into separate files if it becomes too clunky. Rendered output (`*.html`, `*_files/`) is gitignored.
+- `rz_snarl_qpcr_comparison.qmd`: currently the key data wrangling, modeling, and reporting file. We might split this into separate files if it becomes too clunky. Rendered output (`*.html`, `*_files/`) is gitignored. Sections:
+  - **Load data / Clean & Pivot**: experiment data wide by frog; database replicates (qPCR and swab) by replicate group.
+  - **Data Summary**: pairwise scatter of experiment Bd loads across extraction method × qPCR lab (panels A–E).
+  - **Replicate Variability**: all within-group replicate pairs, faceted by qPCR lab × replicate type, kept separate from the experiment data. Used to assess whether replicate variability can be pooled across labs.
