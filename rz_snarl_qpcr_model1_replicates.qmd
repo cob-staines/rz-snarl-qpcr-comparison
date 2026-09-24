@@ -33,6 +33,7 @@ refit = FALSE
 ```
 
 ## Model 1: Replicates
+
 Within-lab noise and detection as a function of load, as a brms hurdle-lognormal model (cmdstanr backend).
 
 - **Latent load**: each replicate group (a capture for swab replicates, an extract for qPCR replicates) has a group-level intercept in `mu`, i.e. its true (log) load.
@@ -44,6 +45,7 @@ Kept deliberately simple given limited replicates. An earlier version also had a
 `mu` and `sigma` are on the natural-log scale of Bd load (ITS1 copies per swab); results are converted to log10 for plots.
 
 ### Model data
+
 ```{r m1-data}
 #| code-fold: true
 #| code-summary: "Show Model data code"
@@ -65,6 +67,7 @@ m1_df %>%
 ```
 
 ### Model structure
+
 ```{r m1-structure}
 #| code-fold: true
 #| code-summary: "Show Model structure code"
@@ -99,7 +102,9 @@ m1_priors = c(
 ```
 
 ### Fit
+
 Fit is saved to `fits/` in the data directory and reloaded unless `refit = TRUE`.
+
 ```{r m1-fit}
 #| code-fold: true
 #| code-summary: "Show Fit code"
@@ -123,6 +128,7 @@ m1 = brm(
 ```
 
 ### Convergence & summary
+
 ```{r m1-summary}
 #| code-fold: true
 #| code-summary: "Show Summary code"
@@ -138,25 +144,64 @@ posterior_summary(m1, variable = "^cor_replicate_group", regex = TRUE) %>%
 ```
 
 ### Detection and noise
-Left: posterior median of each replicate group's latent load against its detection probability. Right: noise SD by noise type (posterior median, 50% and 95% intervals).
+
+Left: each replicate group's latent load (posterior median, 90% interval) against its detection probability (posterior median), coloured by the share of its results detected. Groups with the same detection outcome fall on the same strand, since with 2–3 results per group the detected fraction dominates each group's `hu` estimate. The line and band are the population-level detection curve implied by the model, $P(\text{detected} \mid \text{load})$, for RZ qPCR (posterior median, 90% interval). Right: noise SD by noise type (posterior median, 50% and 95% intervals).
+
 ```{r m1-curves}
 #| code-fold: true
 #| code-summary: "Show Detection and noise code"
-#| fig-width: 9
-#| fig-height: 4
+#| fig-width: 10
+#| fig-height: 4.5
 
 m1_groups = m1_df %>%
-  distinct(replicate_group, .keep_all = TRUE)
+  group_by(replicate_group) %>%
+  mutate(detected_share = paste0(sum(bd_load > 0), "/", n())) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+mu_group = posterior_linpred(m1, newdata = m1_groups, dpar = "mu") / log(10)
+hu_group = posterior_linpred(m1, newdata = m1_groups, dpar = "hu", transform = TRUE)
 
 m1_group_est = m1_groups %>%
-  mutate(
-    log10_load = apply(posterior_linpred(m1, newdata = m1_groups, dpar = "mu"), 2, median) / log(10),
-    p_detect = 1 - apply(posterior_linpred(m1, newdata = m1_groups, dpar = "hu",
-                                           transform = TRUE), 2, median))
+  mutate(log10_load = apply(mu_group, 2, median),
+         log10_load_lo = apply(mu_group, 2, quantile, 0.05),
+         log10_load_hi = apply(mu_group, 2, quantile, 0.95),
+         p_detect = 1 - apply(hu_group, 2, median))
 
-p_det = ggplot(m1_group_est, aes(log10_load, p_detect, colour = qpcr_lab)) +
-  geom_point(alpha = 0.6) +
-  labs(x = "latent log10(Bd load)", y = "P(detected)", colour = "qPCR lab") +
+# population-level detection curve (RZ qPCR), from the bivariate normal group effects:
+# hu | mu ~ N(hu_0 + rho * sd_hu / sd_mu * (mu - mu_0), sd_hu^2 * (1 - rho^2)),
+# averaged over the conditional spread with the probit approximation to the logistic-normal
+m1_pop = as_draws_df(m1) %>%
+  as_tibble() %>%
+  transmute(draw = .draw,
+            mu_0 = b_Intercept,
+            hu_0 = b_hu_Intercept,
+            sd_mu = sd_replicate_group__Intercept,
+            sd_hu = sd_replicate_group__hu_Intercept,
+            rho = cor_replicate_group__Intercept__hu_Intercept)
+
+detection_curve = expand_grid(m1_pop, log10_load = seq(1.5, 7, by = 0.1)) %>%
+  mutate(hu_mean = hu_0 + rho * sd_hu / sd_mu * (log10_load * log(10) - mu_0),
+         hu_var = sd_hu^2 * (1 - rho^2),
+         p_detect = 1 - plogis(hu_mean / sqrt(1 + pi * hu_var / 8))) %>%
+  group_by(log10_load) %>%
+  summarise(med = median(p_detect),
+            lo = quantile(p_detect, 0.05),
+            hi = quantile(p_detect, 0.95),
+            .groups = "drop")
+
+p_det = ggplot() +
+  geom_ribbon(data = detection_curve, aes(log10_load, ymin = lo, ymax = hi),
+              fill = "grey70", alpha = 0.4) +
+  geom_line(data = detection_curve, aes(log10_load, med), colour = "grey30") +
+  geom_errorbar(data = m1_group_est,
+                aes(y = p_detect, xmin = log10_load_lo, xmax = log10_load_hi, colour = detected_share),
+                width = 0, alpha = 0.3) +
+  geom_point(data = m1_group_est,
+             aes(log10_load, p_detect, colour = detected_share, shape = qpcr_lab),
+             alpha = 0.8) +
+  labs(x = "latent log10(Bd load)", y = "P(detected)",
+       colour = "detected", shape = "qPCR lab") +
   theme_bw() +
   theme(legend.position = "bottom")
 
@@ -184,7 +229,9 @@ p_det + p_sig
 ```
 
 ### Posterior predictive checks
+
 Share of results detected, and median positive log10 load, by replicate type × qPCR lab.
+
 ```{r m1-ppc}
 #| code-fold: true
 #| code-summary: "Show PPC code"
@@ -204,7 +251,9 @@ ppc_stat_grouped(y = m1_df$bd_load, yrep = m1_yrep, group = m1_df$ppc_group,
 ```
 
 ### Export for Model 2
+
 Posterior draws and summaries (mean, SD, median, 95% interval) of population-level effects, group-level SDs, and correlations, saved to `fits/m1_replicates_export.rds` for use as priors in Model 2.
+
 ```{r m1-export}
 #| code-fold: true
 #| code-summary: "Show Export code"
