@@ -19,6 +19,18 @@ Analyze Bd qPCR results from a crossed experimental design to identify quantitat
 - 1 vs 2 isolates the **qPCR** effect (identical extract).
 - 2 vs 3 isolates the **extraction** effect, confounded with swab-to-swab variability.
 
+Because of the crossed design, each pairwise comparison draws on a different set of frogs (collection lab = population):
+
+| Panel | Comparison | Frogs | Shared extract? |
+|---|---|---|---|
+| A | Qiagen-RZ vs Qiagen-SNARL | RZ-collected (Pittsburgh) | yes (qPCR effect) |
+| B | PrepMan-RZ vs PrepMan-SNARL | SNARL-collected (Sierra Nevada) | yes (qPCR effect) |
+| C | Qiagen-RZ vs PrepMan-RZ | SNARL-collected | no |
+| D | Qiagen-SNARL vs PrepMan-SNARL | RZ-collected | no |
+| E | Qiagen-RZ vs PrepMan-SNARL | both | no |
+
+Lab, population, and load level are therefore confounded when comparing panels (e.g. C vs D).
+
 Notes:
 - Extraction method maps 1-to-1 to lab: **RZ = Qiagen DNeasy**, **SNARL = PrepMan**.
 - Both labs quantify against ITS1 plasmid standards, but from different standard sources.
@@ -34,6 +46,11 @@ Pulled from the RIBBiTR database (`survey_data.bd_qpcr_results`, joined to `samp
 Only ITS1 results from the two labs that pass IPC (or have no IPC) are used. Zeros are explicit in `bd_its1_copies_per_swab`, so results where it is NA are dropped. Experiment swabs are excluded so they are not counted twice.
 
 Replicates may be pooled across species, sites, and time. Pooling across labs is under consideration, pending visual exploration.
+
+Findings so far:
+- **Swab replicates exist only for RZ** (Qiagen extraction, RZ qPCR, Pittsburgh population); there are none for SNARL. Within-lab swab variability cannot be compared between labs, and swab noise for the Sierra population is only indirectly available from the experiment (panel C).
+- qPCR replicates are few. Same-plate pairs are likely technical well replicates (see `replicates` in `bd_qpcr_results`) rather than re-runs.
+- RZ swab replicates initially looked more variable than the experiment, but their spread among both-positive pairs (SD of log10 difference ≈ 0.82) is similar to experiment panel D (≈ 0.79, same Pittsburgh population), and higher than panel C (≈ 0.43, Sierra population, ~10 both-positive pairs). This suggests noise depends on load/population rather than a systematic problem with the swab replicates, which are retained for now.
 
 ## Hypothesis
 qPCR results from the SNARL lab underestimate low Bd quantities compared to the RZ qPCR protocol, but are otherwise comparable.
@@ -53,3 +70,4 @@ Bd load within a population is generally modeled as a hurdle-lognormal quantity.
   - **Load data / Clean & Pivot**: experiment data wide by frog; database replicates (qPCR and swab) by replicate group.
   - **Data Summary**: pairwise scatter of experiment Bd loads across extraction method × qPCR lab (panels A–E).
   - **Replicate Variability**: all within-group replicate pairs, faceted by qPCR lab × replicate type, kept separate from the experiment data. Used to assess whether replicate variability can be pooled across labs.
+  - **Replicate Diagnostics**: pair agreement (detection outcomes, SD of log10 differences) for experiment panels vs replicates; swab replicate group checks (sample types, name conflicts, plates, projects); largest swab disagreements.

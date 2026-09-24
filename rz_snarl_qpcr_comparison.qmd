@@ -37,11 +37,17 @@ snarl_raw = import(here(wddir, "qpcr_compare_data_260904.xlsx"),
 db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
 db_sample = tbl(dbcon, Id("survey_data", "sample"))
 db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
 
 # filter before counting replicates, so replicate counts reflect usable results only
 bd_results = db_bd %>%
   inner_join(db_sample, by = "sample_id") %>%
   inner_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey %>% select(survey_id, visit_id), by = "survey_id") %>%
+  left_join(db_visit %>% select(visit_id, date, site_id, project_id), by = "visit_id") %>%
+  left_join(db_site %>% select(site_id, site), by = "site_id") %>%
   filter(ipc_pass | is.na(ipc_pass),
          standard_target_type == "ITS1",
          !is.na(bd_its1_copies_per_swab),
@@ -59,7 +65,17 @@ bd_results = db_bd %>%
          qpcr_lab,
          extraction_kit,
          taxon_capture,
-         comments_qpcr) %>%
+         comments_qpcr,
+         # metadata for replicate diagnostics
+         sample_type,
+         sample_name_conflict,
+         swab_type,
+         qpcr_well_replicates = replicates,
+         extraction_date,
+         qpcr_date,
+         visit_date = date,
+         site,
+         project_id) %>%
   collect()
 
 dbDisconnect(dbcon)
@@ -151,6 +167,7 @@ swab_replicates_clean = db_clean %>%
 replicates_clean = bind_rows(qpcr_replicates_clean,
                              swab_replicates_clean) %>%
   select(all_of(colnames(snarl_clean)),
+         qpcr_plate_name,
          replicate_type,
          replicate_group,
          replicate_id)
@@ -240,7 +257,7 @@ Within-lab replicate pairs by qPCR lab and replicate type, to assess whether rep
 # All within-group replicate pairs (i < j)
 replicate_long = replicates_clean %>%
   mutate(pipeline = paste(extraction_method, qpcr_lab, sep = "_")) %>%
-  select(replicate_type, replicate_group, pipeline, qpcr_lab, replicate_id, bd_load)
+  select(replicate_type, replicate_group, pipeline, qpcr_lab, replicate_id, qpcr_plate_name, bd_load)
 
 replicate_pairs = replicate_long %>%
   inner_join(replicate_long,
@@ -249,6 +266,7 @@ replicate_pairs = replicate_long %>%
              relationship = "many-to-many") %>%
   filter(replicate_id_x < replicate_id_y) %>%
   transmute(replicate_type, qpcr_lab, pipeline,
+            same_qpcr_plate = qpcr_plate_name_x == qpcr_plate_name_y,
             x = bd_load_x,
             y = bd_load_y)
 
@@ -282,4 +300,121 @@ ggplot(rep_plot_df, aes(log10(x + 1), log10(y + 1))) +
         strip.text = element_text(face = "bold"),
         panel.grid.minor = element_blank())
 
+```
+
+## Replicate Diagnostics
+Swab replicates appear more variable than the different-swab experiment comparisons (panels C–E). These diagnostics check whether that is real variability, or an artifact of how replicate groups are defined (non-duplicate swabs, name conflicts, batch/plate effects, specific projects or sites).
+
+### Pair agreement
+Share of pairs by detection outcome, and SD of the log10 difference among pairs where both are positive. Replicates are split by whether the pair was run on the same qPCR plate (for qPCR replicates, same plate = technical well replicates).
+```{r diag-pairs}
+#| code-fold: true
+#| code-summary: "Show Pair agreement code"
+
+summarise_pairs = function(df) {
+  df %>%
+    summarise(n_pairs = n(),
+              both_zero = mean(x == 0 & y == 0),
+              one_zero = mean(xor(x > 0, y > 0)),
+              both_pos = mean(x > 0 & y > 0),
+              sd_log10_diff_pos = sd((log10(y) - log10(x))[x > 0 & y > 0]),
+              .groups = "drop")
+}
+
+experiment_agreement = plot_df %>%
+  mutate(dataset = paste0("Experiment ", letter, ": ", xvar, " vs ", yvar),
+         shared_extract = letter %in% c("A", "B")) %>%
+  group_by(dataset, shared_extract) %>%
+  summarise_pairs()
+
+replicate_agreement = replicate_pairs %>%
+  mutate(dataset = paste0(replicate_type, " replicates: ", pipeline, ", ",
+                          if_else(same_qpcr_plate, "same qPCR plate", "different qPCR plates")),
+         shared_extract = replicate_type == "qpcr") %>%
+  group_by(dataset, shared_extract) %>%
+  summarise_pairs()
+
+bind_rows(experiment_agreement, replicate_agreement) %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                full_width = TRUE,
+                font_size = 12)
+```
+
+### Swab replicate groups
+Per capture × pipeline group: number of swabs, sample types, name conflicts, number of extraction & qPCR plates, and spread of loads.
+```{r diag-swab-groups}
+#| code-fold: true
+#| code-summary: "Show Swab replicate groups code"
+
+swab_groups = swab_replicates_clean %>%
+  group_by(qpcr_lab, replicate_group) %>%
+  summarise(n_swabs = n(),
+            n_sample_types = n_distinct(sample_type),
+            name_conflict = any(!is.na(sample_name_conflict)),
+            n_extraction_plates = n_distinct(extraction_plate_name),
+            n_qpcr_plates = n_distinct(qpcr_plate_name),
+            qpcr_days_apart = as.numeric(max(as.Date(qpcr_date)) - min(as.Date(qpcr_date))),
+            min_load = min(bd_load),
+            max_load = max(bd_load),
+            log10_range = log10(max_load + 1) - log10(min_load + 1),
+            discordant = min_load == 0 & max_load > 0,
+            project_id = first(project_id),
+            site = first(site),
+            visit_date = first(visit_date),
+            .groups = "drop")
+
+# group-level flags by lab
+swab_groups %>%
+  group_by(qpcr_lab) %>%
+  summarise(n_groups = n(),
+            more_than_2_swabs = mean(n_swabs > 2),
+            multiple_sample_types = mean(n_sample_types > 1),
+            name_conflict = mean(name_conflict),
+            multiple_extraction_plates = mean(n_extraction_plates > 1),
+            multiple_qpcr_plates = mean(n_qpcr_plates > 1),
+            median_qpcr_days_apart = median(qpcr_days_apart, na.rm = TRUE),
+            discordant = mean(discordant),
+            median_log10_range = median(log10_range),
+            .groups = "drop") %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                full_width = TRUE,
+                font_size = 12)
+
+# is disagreement concentrated in specific projects?
+swab_groups %>%
+  group_by(qpcr_lab, project_id) %>%
+  summarise(n_groups = n(),
+            discordant = mean(discordant),
+            median_log10_range = median(log10_range),
+            .groups = "drop") %>%
+  arrange(qpcr_lab, desc(n_groups)) %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                full_width = TRUE,
+                font_size = 12)
+```
+
+### Largest swab replicate disagreements
+Individual swabs from the 15 groups with the largest load range.
+```{r diag-swab-worst}
+#| code-fold: true
+#| code-summary: "Show Largest disagreements code"
+
+worst_groups = swab_groups %>%
+  slice_max(log10_range, n = 15, with_ties = FALSE) %>%
+  pull(replicate_group)
+
+swab_replicates_clean %>%
+  filter(replicate_group %in% worst_groups) %>%
+  select(replicate_group, bd_swab_id, sample_type, sample_name_conflict,
+         site, visit_date, extraction_plate_name, extraction_date,
+         qpcr_plate_name, qpcr_date, qpcr_well_replicates, bd_load, notes) %>%
+  arrange(replicate_group, bd_swab_id) %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                full_width = TRUE,
+                font_size = 11) %>%
+  scroll_box(height = "400px")
 ```
