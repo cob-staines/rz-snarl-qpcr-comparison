@@ -57,12 +57,14 @@ Findings so far:
 qPCR results from the SNARL lab underestimate low Bd quantities compared to the RZ qPCR protocol, but are otherwise comparable.
 
 ## Methods
-Bayesian hurdle-lognormal models in brms (cmdstanr backend) on Bd load (ITS1 copies per swab). Each unit (replicate group, or frog) has a latent load expressed as a group-level intercept that is correlated across `mu`, `hu`, and `sigma`; the correlations capture load-dependent detection (zeros treated as non-detections) and load-dependent noise.
+Bayesian hurdle-lognormal models in brms (cmdstanr backend) on Bd load (ITS1 copies per swab). Each unit (replicate group, or frog) has a latent load expressed as a group-level intercept in `mu`, correlated with a group-level intercept in `hu`; the correlation captures load-dependent detection (zeros treated as non-detections).
 
 Bd load within a population is generally modeled as a hurdle-lognormal quantity. Here, the goal is not to represent a population, but to compare relative values between control groups. The model must therefore handle zeros as non-detections (possibly load-dependent detection), rather than as true absence.
 
 Two-stage approach:
-1. **Model 1: Replicates**. Correlated group-level intercepts per replicate group in `mu`, `hu`, `sigma`; qPCR lab effect on `hu`; `sigma` by noise type (swab replicates: total noise; qPCR replicates: within-plate well noise); qPCR run (extract × plate) effect in `mu`. Posterior summaries are saved as priors for Model 2.
+1. **Model 1: Replicates**. Correlated group-level intercepts per replicate group in `mu` and `hu`; qPCR lab effect on `hu`; `sigma` by noise type (swab replicates: total noise; qPCR replicates: noise between qPCR re-runs). Posterior summaries are saved as priors for Model 2.
+   - Kept simple given limited replicates: a first version with a qPCR run (extract × plate) effect and a `sigma` group-level intercept (load-dependent noise) had 21 divergent transitions; neither term was identified (nearly every qPCR run was a single well; 2–3 positives per group).
+   - First-version results: detection increases with load (`cor(mu, hu)` ≈ −0.55, 95% CI −0.91 to −0.04); swab noise ≈ 0.50 log10 per result; qPCR noise and SNARL detection (`hu_qpcr_labsnarl` −0.81 ± 1.84) are poorly informed by replicates and must be learned mainly from the experiment. Replicates cannot answer Key question 1.
 2. **Model 2: Experiment** (to be implemented). Latent load per frog; lab-specific extraction and qPCR effects on `mu` and `hu`; priors on noise and detection informed by Model 1.
 
 ### Key questions
@@ -73,7 +75,8 @@ Two-stage approach:
 ## Files
 Rendered output (`*.html`, `*_files/`) and fitted models are not tracked in git. Fitted models are saved to `$data_dir/bd_qpcr_results/rz_snarl_qpcr_comparison/fits/`.
 
-- `R/data_prep.R`: loads experiment data (xlsx) and database results, and builds cleaned experiment (`snarl_clean`, `snarl_wide`) and replicate (`replicates_clean`, etc.) tables. Sourced by both qmd files.
+- `R/data_import.R`: pulls experiment data (xlsx) and database results, and saves them to `rz_snarl_qpcr_raw_data.RData` in the data directory. Run once, and again whenever source data change (only step needing a database connection).
+- `R/data_prep.R`: loads the saved raw data and builds cleaned experiment (`snarl_clean`, `snarl_wide`) and replicate (`replicates_clean`, etc.) tables. Sourced by both qmd files.
 - `rz_snarl_qpcr_diagnostics.qmd`: data exploration and diagnostics.
   - **Experiment data**: Bd load by frog, wide across extraction method × qPCR lab.
   - **Data Summary**: pairwise scatter of experiment Bd loads across extraction method × qPCR lab (panels A–E).

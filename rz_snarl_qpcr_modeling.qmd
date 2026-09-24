@@ -11,13 +11,13 @@ editor: visual
 
 ## Setup
 
-Load packages; load and clean experiment and replicate data (`R/data_prep.R`)
+Load packages; load and clean experiment and replicate data (`R/data_prep.R`, from data saved by `R/data_import.R`)
 
 ```{r setup}
 #| code-fold: true
 #| code-summary: "Show Setup code"
 #| results: hide
-librarian::shelf(tidyverse, here, knitr, kableExtra, ggplot2, patchwork, brms, cmdstanr, posterior)
+librarian::shelf(tidyverse, here, knitr, kableExtra, ggplot2, patchwork, brms, cmdstanr, posterior, bayesplot)
 
 cmdstanr::check_cmdstan_toolchain()   # confirms Stan is found
 set_cmdstan_path(Sys.getenv("cmd_stan_path"))
@@ -36,9 +36,10 @@ refit = FALSE
 Within-lab noise and detection as a function of load, as a brms hurdle-lognormal model (cmdstanr backend).
 
 - **Latent load**: each replicate group (a capture for swab replicates, an extract for qPCR replicates) has a group-level intercept in `mu`, i.e. its true (log) load.
-- **Detection**: `hu` (probability of a zero) has a qPCR lab effect and a group-level intercept. The group-level intercepts of `mu`, `hu`, and `sigma` are correlated (shared ID `g`), so the `mu`–`hu` correlation captures load-dependent detection (expected negative: higher load, fewer zeros).
-- **Noise**: `sigma` differs by noise type (swab replicate: total noise; qPCR replicate: within-plate well noise), with a group-level intercept correlated with `mu`, capturing load-dependent noise.
-- **qPCR runs**: qPCR replicates get a run (extract × qPCR plate) effect in `mu`, shared by wells on the same plate. Swab replicates have no run effect (`0 + is_qpcr` slope is zero for them).
+- **Detection**: `hu` (probability of a zero) has a qPCR lab effect and a group-level intercept. The group-level intercepts of `mu` and `hu` are correlated (shared ID `g`), so the `mu`–`hu` correlation captures load-dependent detection (expected negative: higher load, fewer zeros).
+- **Noise**: `sigma` differs by noise type: swab replicates (total noise: swab + extraction + qPCR) and qPCR replicates (total noise between qPCR re-runs of the same extract).
+
+Kept deliberately simple given limited replicates. An earlier version also had a qPCR run (extract × plate) effect and a `sigma` group-level intercept (load-dependent noise); neither was identified (nearly every qPCR run was a single well; 2–3 positives per group), and they caused divergent transitions.
 
 `mu` and `sigma` are on the natural-log scale of Bd load (ITS1 copies per swab); results are converted to log10 for plots.
 
@@ -50,18 +51,13 @@ Within-lab noise and detection as a function of load, as a brms hurdle-lognormal
 m1_df = replicates_clean %>%
   mutate(qpcr_lab = factor(qpcr_lab, levels = c("rz", "snarl")),
          noise_type = factor(replicate_type, levels = c("swab", "qpcr")),
-         is_qpcr = as.integer(replicate_type == "qpcr"),
-         # run (extract x qPCR plate); swab results get their own key, unused since is_qpcr = 0
-         run_key = if_else(replicate_type == "qpcr",
-                           paste(replicate_group, qpcr_plate_name, sep = "_"),
-                           paste(replicate_group, bd_swab_id, sep = "_")),
          ppc_group = paste(replicate_type, qpcr_lab))
 
 m1_df %>%
   group_by(replicate_type, qpcr_lab) %>%
   summarise(groups = n_distinct(replicate_group),
             results = n(),
-            runs = n_distinct(run_key[is_qpcr == 1]),
+            qpcr_plates = n_distinct(qpcr_plate_name),
             detected = mean(bd_load > 0),
             .groups = "drop") %>%
   kable(digits = 2) %>%
@@ -77,14 +73,12 @@ m1_family = hurdle_lognormal()
 
 m1_formula = bf(
   bd_load ~ 1 +
-    (1 | g | replicate_group) +
-    (0 + is_qpcr | run_key),
+    (1 | g | replicate_group),
 
   hu ~ 1 + qpcr_lab +
     (1 | g | replicate_group),
 
-  sigma ~ 0 + noise_type +
-    (1 | g | replicate_group)
+  sigma ~ 0 + noise_type
 )
 
 m1_priors = c(
@@ -116,7 +110,7 @@ m1 = brm(
   data = m1_df,
   family = m1_family,
   prior = m1_priors,
-  control = list(adapt_delta = 0.95),
+  control = list(adapt_delta = 0.98),
   chains = 4,
   iter = 2000,
   warmup = 1000,
@@ -135,7 +129,7 @@ m1 = brm(
 
 summary(m1)
 
-# group-level correlations: mu-hu (detection vs load) and mu-sigma (noise vs load)
+# group-level correlation: mu-hu (detection vs load)
 posterior_summary(m1, variable = "^cor_replicate_group", regex = TRUE) %>%
   as.data.frame() %>%
   rownames_to_column("term") %>%
@@ -143,27 +137,22 @@ posterior_summary(m1, variable = "^cor_replicate_group", regex = TRUE) %>%
   kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
 ```
 
-### Detection and noise vs. load
-Posterior median of each replicate group's latent load against its detection probability and noise SD (run effects excluded).
+### Detection and noise
+Left: posterior median of each replicate group's latent load against its detection probability. Right: noise SD by noise type (posterior median, 50% and 95% intervals).
 ```{r m1-curves}
 #| code-fold: true
-#| code-summary: "Show Curves code"
+#| code-summary: "Show Detection and noise code"
 #| fig-width: 9
 #| fig-height: 4
 
 m1_groups = m1_df %>%
   distinct(replicate_group, .keep_all = TRUE)
 
-group_re = ~ (1 | g | replicate_group)
-
 m1_group_est = m1_groups %>%
   mutate(
-    log10_load = apply(posterior_linpred(m1, newdata = m1_groups, dpar = "mu",
-                                         re_formula = group_re), 2, median) / log(10),
+    log10_load = apply(posterior_linpred(m1, newdata = m1_groups, dpar = "mu"), 2, median) / log(10),
     p_detect = 1 - apply(posterior_linpred(m1, newdata = m1_groups, dpar = "hu",
-                                           re_formula = group_re, transform = TRUE), 2, median),
-    sigma_log10 = apply(posterior_linpred(m1, newdata = m1_groups, dpar = "sigma",
-                                          re_formula = group_re, transform = TRUE), 2, median) / log(10))
+                                           transform = TRUE), 2, median))
 
 p_det = ggplot(m1_group_est, aes(log10_load, p_detect, colour = qpcr_lab)) +
   geom_point(alpha = 0.6) +
@@ -171,11 +160,25 @@ p_det = ggplot(m1_group_est, aes(log10_load, p_detect, colour = qpcr_lab)) +
   theme_bw() +
   theme(legend.position = "bottom")
 
-p_sig = ggplot(m1_group_est, aes(log10_load, sigma_log10, colour = noise_type)) +
-  geom_point(alpha = 0.6) +
-  labs(x = "latent log10(Bd load)", y = "noise SD (log10)", colour = "noise type") +
-  theme_bw() +
-  theme(legend.position = "bottom")
+# sigma is on the log scale of ln(load); convert to SD of log10(load)
+m1_sigma = as_draws_df(m1) %>%
+  as_tibble() %>%
+  select(starts_with("b_sigma_noise_type")) %>%
+  pivot_longer(everything(), names_to = "noise_type", values_to = "value") %>%
+  mutate(noise_type = str_remove(noise_type, "b_sigma_noise_type"),
+         sigma_log10 = exp(value) / log(10)) %>%
+  group_by(noise_type) %>%
+  summarise(med = median(sigma_log10),
+            lo50 = quantile(sigma_log10, 0.25), hi50 = quantile(sigma_log10, 0.75),
+            lo95 = quantile(sigma_log10, 0.025), hi95 = quantile(sigma_log10, 0.975),
+            .groups = "drop")
+
+p_sig = ggplot(m1_sigma, aes(noise_type, med)) +
+  geom_linerange(aes(ymin = lo95, ymax = hi95)) +
+  geom_linerange(aes(ymin = lo50, ymax = hi50), linewidth = 1.5) +
+  geom_point(size = 2.5) +
+  labs(x = "noise type", y = "noise SD (log10)") +
+  theme_bw()
 
 p_det + p_sig
 ```
@@ -188,12 +191,15 @@ Share of results detected, and median positive log10 load, by replicate type × 
 #| fig-width: 8
 #| fig-height: 4
 
-pp_check(m1, type = "stat_grouped", group = "ppc_group", ndraws = 500,
-         stat = function(y) mean(y > 0)) +
+# pp_check only sees model variables, so call bayesplot directly with the grouping column
+m1_yrep = posterior_predict(m1, ndraws = 500)
+
+ppc_stat_grouped(y = m1_df$bd_load, yrep = m1_yrep, group = m1_df$ppc_group,
+                 stat = function(y) mean(y > 0)) +
   labs(x = "share detected")
 
-pp_check(m1, type = "stat_grouped", group = "ppc_group", ndraws = 500,
-         stat = function(y) median(log10(y[y > 0]))) +
+ppc_stat_grouped(y = m1_df$bd_load, yrep = m1_yrep, group = m1_df$ppc_group,
+                 stat = function(y) median(log10(y[y > 0]))) +
   labs(x = "median log10(Bd load) among positives")
 ```
 

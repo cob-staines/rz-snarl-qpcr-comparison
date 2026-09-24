@@ -11,7 +11,7 @@ editor: visual
 
 ## Setup
 
-Load packages; load and clean experiment and replicate data (`R/data_prep.R`)
+Load packages; load and clean experiment and replicate data (`R/data_prep.R`, from data saved by `R/data_import.R`)
 
 ```{r setup}
 #| code-fold: true
