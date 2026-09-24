@@ -48,9 +48,10 @@ Only ITS1 results from the two labs that pass IPC (or have no IPC) are used. Zer
 Replicates may be pooled across species, sites, and time. Pooling across labs is under consideration, pending visual exploration.
 
 Findings so far:
-- **Swab replicates exist only for RZ** (Qiagen extraction, RZ qPCR, Pittsburgh population); there are none for SNARL. Within-lab swab variability cannot be compared between labs, and swab noise for the Sierra population is only indirectly available from the experiment (panel C).
+- **Swab replicates exist only for RZ** (Qiagen extraction, RZ qPCR; source projects/populations to be confirmed); there are none for SNARL. Within-lab swab variability cannot be compared between labs, and swab noise for the Sierra population is only indirectly available from the experiment (panel C).
 - qPCR replicates are few. Same-plate pairs are likely technical well replicates (see `replicates` in `bd_qpcr_results`) rather than re-runs.
-- RZ swab replicates initially looked more variable than the experiment, but their spread among both-positive pairs (SD of log10 difference ≈ 0.82) is similar to experiment panel D (≈ 0.79, same Pittsburgh population), and higher than panel C (≈ 0.43, Sierra population, ~10 both-positive pairs). This suggests noise depends on load/population rather than a systematic problem with the swab replicates, which are retained for now.
+- RZ swab replicates initially looked more variable than the experiment, but their spread among both-positive pairs (SD of log10 difference ≈ 0.82) is similar to experiment panel D (≈ 0.79, Pittsburgh population), and higher than panel C (≈ 0.43, Sierra population, ~10 both-positive pairs). This suggests noise depends on load/population rather than a systematic problem with the swab replicates, which are retained for now.
+- Difference vs. mean (Bland–Altman) plots show the noise-vs-load curves of the different-swab comparisons (experiment C–E and RZ swab replicates) line up: spread depends on load, not population. **The RZ swab replicates will inform a shared, load-dependent swab-noise term.**
 
 ## Hypothesis
 qPCR results from the SNARL lab underestimate low Bd quantities compared to the RZ qPCR protocol, but are otherwise comparable.
@@ -70,4 +71,4 @@ Bd load within a population is generally modeled as a hurdle-lognormal quantity.
   - **Load data / Clean & Pivot**: experiment data wide by frog; database replicates (qPCR and swab) by replicate group.
   - **Data Summary**: pairwise scatter of experiment Bd loads across extraction method × qPCR lab (panels A–E).
   - **Replicate Variability**: all within-group replicate pairs, faceted by qPCR lab × replicate type, kept separate from the experiment data. Used to assess whether replicate variability can be pooled across labs.
-  - **Replicate Diagnostics**: pair agreement (detection outcomes, SD of log10 differences) for experiment panels vs replicates; swab replicate group checks (sample types, name conflicts, plates, projects); largest swab disagreements.
+  - **Replicate Diagnostics**: pair agreement (detection outcomes, SD of log10 differences) for experiment panels vs replicates; swab replicate group checks (sample types, name conflicts, plates, projects); largest swab disagreements; difference vs. mean (Bland–Altman) plots to test whether noise depends on load and population.

@@ -168,6 +168,7 @@ replicates_clean = bind_rows(qpcr_replicates_clean,
                              swab_replicates_clean) %>%
   select(all_of(colnames(snarl_clean)),
          qpcr_plate_name,
+         project_id,
          replicate_type,
          replicate_group,
          replicate_id)
@@ -257,15 +258,15 @@ Within-lab replicate pairs by qPCR lab and replicate type, to assess whether rep
 # All within-group replicate pairs (i < j)
 replicate_long = replicates_clean %>%
   mutate(pipeline = paste(extraction_method, qpcr_lab, sep = "_")) %>%
-  select(replicate_type, replicate_group, pipeline, qpcr_lab, replicate_id, qpcr_plate_name, bd_load)
+  select(replicate_type, replicate_group, pipeline, qpcr_lab, project_id, replicate_id, qpcr_plate_name, bd_load)
 
 replicate_pairs = replicate_long %>%
   inner_join(replicate_long,
-             by = c("replicate_type", "replicate_group", "pipeline", "qpcr_lab"),
+             by = c("replicate_type", "replicate_group", "pipeline", "qpcr_lab", "project_id"),
              suffix = c("_x", "_y"),
              relationship = "many-to-many") %>%
   filter(replicate_id_x < replicate_id_y) %>%
-  transmute(replicate_type, qpcr_lab, pipeline,
+  transmute(replicate_type, qpcr_lab, pipeline, project_id,
             same_qpcr_plate = qpcr_plate_name_x == qpcr_plate_name_y,
             x = bd_load_x,
             y = bd_load_y)
@@ -417,4 +418,82 @@ swab_replicates_clean %>%
                 full_width = TRUE,
                 font_size = 11) %>%
   scroll_box(height = "400px")
+```
+
+### Difference vs. mean
+Bland–Altman style: difference in log10(Bd load + 1) between the two members of each pair, against their mean. Lines are smoothed mean absolute differences. If spread shrinks with load and populations/projects follow the same curve, the differences between panels are explained by load rather than population or lab.
+```{r diag-bland-altman}
+#| code-fold: true
+#| code-summary: "Show Difference vs. mean code"
+#| fig-width: 9
+#| fig-height: 8
+
+# experiment pairs, keeping collecting lab (population) per frog
+experiment_pairs = pmap_dfr(pairs, function(letter, xvar, yvar) {
+  tibble(letter = letter,
+         dataset = paste0("Experiment ", letter, ": ", nice[xvar], " vs ", nice[yvar]),
+         collect_lab = snarl_wide$collect_lab,
+         x = snarl_wide[[xvar]],
+         y = snarl_wide[[yvar]])
+}) %>%
+  filter(!is.na(x), !is.na(y))
+
+ba_df = bind_rows(
+  experiment_pairs %>%
+    transmute(dataset,
+              different_swabs = !letter %in% c("A", "B"),
+              group = recode_values(collect_lab,
+                                    "rz" ~ "Collected: RZ (Pittsburgh)",
+                                    "snarl" ~ "Collected: SNARL (Sierra Nevada)",
+                                    default = collect_lab),
+              x, y),
+  replicate_pairs %>%
+    transmute(dataset = paste0(replicate_type, " replicates: ", nice[pipeline]),
+              different_swabs = replicate_type == "swab",
+              group = paste("DB project:", project_id),
+              x, y)) %>%
+  mutate(mean_log = (log10(x + 1) + log10(y + 1)) / 2,
+         diff_log = log10(y + 1) - log10(x + 1),
+         outcome = case_when(x == 0 & y == 0 ~ "both zero",
+                             x == 0 | y == 0 ~ "one zero",
+                             TRUE ~ "both positive"))
+
+# all datasets
+ggplot(ba_df, aes(mean_log, diff_log, colour = group)) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
+  geom_point(aes(shape = outcome), alpha = 0.6) +
+  geom_smooth(aes(y = abs(diff_log)), method = "loess", se = FALSE, linewidth = 0.7) +
+  facet_wrap(~ dataset) +
+  scale_shape_manual(values = c("both zero" = 4, "one zero" = 1, "both positive" = 16)) +
+  labs(x = "mean log10(Bd load + 1)",
+       y = "difference in log10(Bd load + 1)  (line: mean |difference|)",
+       colour = NULL, shape = NULL) +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold"),
+        panel.grid.minor = element_blank(),
+        legend.position = "bottom",
+        legend.direction = "vertical")
+
+```
+
+Overlay of the different-swab comparisons only (experiment C–E and swab replicates), to compare noise-vs-load curves directly.
+```{r diag-bland-altman-overlay}
+#| code-fold: true
+#| code-summary: "Show overlay code"
+#| fig-width: 7
+#| fig-height: 5
+
+ba_df %>%
+  filter(different_swabs, outcome != "both zero") %>%
+  ggplot(aes(mean_log, abs(diff_log), colour = dataset)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "loess", se = FALSE, linewidth = 0.9) +
+  labs(x = "mean log10(Bd load + 1)",
+       y = "|difference in log10(Bd load + 1)|",
+       colour = NULL) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        legend.position = "bottom",
+        legend.direction = "vertical")
 ```
