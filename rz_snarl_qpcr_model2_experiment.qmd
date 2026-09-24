@@ -29,7 +29,7 @@ fit_dir = here(wddir, "fits")
 dir.create(fit_dir, showWarnings = FALSE)
 
 # set TRUE to refit models instead of loading saved fits
-refit = TRUE
+refit = FALSE
 ```
 
 ## Model 1 results
@@ -444,6 +444,126 @@ saveRDS(list(draws = m2b_correction,
              import_date = import_date,
              export_date = Sys.Date()),
         here(fit_dir, "m2b_constant_correction_export.rds"))
+```
+
+### Detection conversion (Model 2b)
+Probability of detecting Bd by pipeline, as a function of a frog's true load on the reference (Qiagen–RZ) scale. Derived from the frog-level `L`–`hu` correlation: for a frog with true load $\ell$ (ln),
+
+$$\text{hu} \mid \ell \sim N\left(h_0 + h_\text{pipeline} + \rho \frac{\sigma_{hu}}{\sigma_L}(\ell - L_0),\; \sigma_{hu}^2(1 - \rho^2)\right)$$
+
+averaged over the conditional spread (probit approximation to the logistic-normal), $P(\text{detected}) = 1 - E[\text{logit}^{-1}(\text{hu})]$.
+
+Caveats: pipelines share the detection-vs-load slope and differ only in baseline (correlation approach); the curve reflects frog-level load (swab-to-swab variation not included); population differences are absorbed by the frog-level effects, so the load–detection relationship mixes within- and between-population variation; curves are extrapolated below the range of observed positive loads.
+```{r m2b-detection}
+#| code-fold: true
+#| code-summary: "Show Detection conversion code"
+#| fig-width: 7
+#| fig-height: 4.5
+
+# thin to 2000 draws to keep the grid manageable
+m2b_det_draws = m2b_draws %>%
+  slice(round(seq(1, n(), length.out = 2000))) %>%
+  transmute(.draw,
+            L_0 = b_L_Intercept,
+            hu_0 = b_hu_Intercept,
+            hu_prepman = b_hu_extraction_methodprepman,
+            hu_snarl = b_hu_qpcr_labsnarl,
+            sd_L = sd_frog_id__L_Intercept,
+            sd_hu = sd_frog_id__hu_Intercept,
+            rho = cor_frog_id__hu_Intercept__L_Intercept)
+
+det_pipelines = tribble(
+  ~pipeline,        ~prepman, ~snarl_qpcr,
+  "qiagen_rz",      0,        0,
+  "qiagen_snarl",   0,        1,
+  "prepman_rz",     1,        0,
+  "prepman_snarl",  1,        1)
+
+detection_draws = expand_grid(m2b_det_draws,
+                              det_pipelines,
+                              log10_load = seq(0, 9, by = 0.05)) %>%
+  mutate(hu_mean = hu_0 + hu_prepman * prepman + hu_snarl * snarl_qpcr +
+           rho * sd_hu / sd_L * (log10_load * log(10) - L_0),
+         hu_var = sd_hu^2 * (1 - rho^2),
+         p_detect = 1 - plogis(hu_mean / sqrt(1 + pi * hu_var / 8))) %>%
+  select(.draw, pipeline, log10_load, p_detect)
+
+detection_curves = detection_draws %>%
+  group_by(pipeline, log10_load) %>%
+  summarise(med = median(p_detect),
+            lo = quantile(p_detect, 0.05),
+            hi = quantile(p_detect, 0.95),
+            .groups = "drop")
+
+# range of observed positive loads in the experiment (log10), for reference
+obs_range = range(log10(m2_df$bd_load[m2_df$bd_load > 0]))
+
+detection_curves %>%
+  filter(log10_load <= 7) %>%
+  ggplot(aes(log10_load, med, colour = pipeline, fill = pipeline)) +
+  annotate("rect", xmin = obs_range[1], xmax = min(obs_range[2], 7), ymin = -Inf, ymax = Inf,
+           fill = "grey90", alpha = 0.5) +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.15, colour = NA) +
+  geom_line() +
+  labs(x = "true log10(Bd load), Qiagen–RZ scale",
+       y = "P(detected)",
+       colour = NULL, fill = NULL,
+       caption = "Shaded: range of observed positive loads in the experiment") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+Detection thresholds: true load (log10, Qiagen–RZ scale) at which each pipeline reaches 50% and 90% detection (posterior median and 95% interval).
+```{r m2b-detection-thresholds}
+#| code-fold: true
+#| code-summary: "Show Detection thresholds code"
+
+detection_thresholds = detection_draws %>%
+  group_by(.draw, pipeline) %>%
+  summarise(load_50 = suppressWarnings(min(log10_load[p_detect >= 0.5])),
+            load_90 = suppressWarnings(min(log10_load[p_detect >= 0.9])),
+            .groups = "drop") %>%
+  pivot_longer(c(load_50, load_90), names_to = "threshold", values_to = "log10_load")
+
+detection_thresholds %>%
+  group_by(pipeline, threshold) %>%
+  summarise(median = median(log10_load[is.finite(log10_load)]),
+            lo95 = quantile(log10_load[is.finite(log10_load)], 0.025),
+            hi95 = quantile(log10_load[is.finite(log10_load)], 0.975),
+            # draws never reaching the threshold within log10 load 0-9
+            share_not_reached = mean(!is.finite(log10_load)),
+            .groups = "drop") %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+Detection probability at selected true loads for the two labs' standard pipelines, and the difference (RZ − SNARL; posterior median and 95% interval).
+```{r m2b-detection-table}
+#| code-fold: true
+#| code-summary: "Show Detection table code"
+
+detection_draws %>%
+  filter(pipeline %in% c("qiagen_rz", "prepman_snarl"),
+         round(log10_load, 2) %in% 1:6) %>%
+  pivot_wider(names_from = pipeline, values_from = p_detect) %>%
+  mutate(difference = qiagen_rz - prepman_snarl) %>%
+  pivot_longer(c(qiagen_rz, prepman_snarl, difference), names_to = "quantity") %>%
+  group_by(log10_load, quantity) %>%
+  summarise(value = sprintf("%.2f (%.2f, %.2f)", median(value),
+                            quantile(value, 0.025), quantile(value, 0.975)),
+            .groups = "drop") %>%
+  pivot_wider(names_from = quantity, values_from = value) %>%
+  select(log10_load, qiagen_rz, prepman_snarl, difference) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+
+# export detection curves and thresholds
+saveRDS(list(curves = detection_curves,
+             thresholds = detection_thresholds,
+             load_scale = "true log10 load, Qiagen-RZ scale (frog level)",
+             import_date = import_date,
+             export_date = Sys.Date()),
+        here(fit_dir, "m2b_detection_export.rds"))
 ```
 
 ### Correction to a common scale (Model 2, with slope)
