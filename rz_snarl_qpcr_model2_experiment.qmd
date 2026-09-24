@@ -29,7 +29,7 @@ fit_dir = here(wddir, "fits")
 dir.create(fit_dir, showWarnings = FALSE)
 
 # set TRUE to refit models instead of loading saved fits
-refit = FALSE
+refit = TRUE
 ```
 
 ## Model 1 results
@@ -59,11 +59,13 @@ For positive results, the expected log load is
 
 $$\mu = L + d + s \cdot \text{SNARL qPCR} \cdot (L - L_\text{ref})$$
 
-- **`L`, latent swab load**: population (`collect_lab`) effect, a frog-level intercept (the frog's true load), and a swab-level intercept (swab + extraction noise; shared by results 1 & 2, which share an extract), with an SD pooled across extraction methods. A version with a separate SD per extraction method showed the two SDs strongly negatively correlated in the posterior: each frog has exactly one Qiagen and one PrepMan swab, so the design identifies only their combined variance. Whether one extraction method is noisier than the other cannot be answered with this design.
+- **`L`, latent swab load**: an intercept, a frog-level intercept (the frog's true load), and a swab-level intercept (swab + extraction noise; shared by results 1 & 2, which share an extract), with an SD pooled across extraction methods. A version with a separate SD per extraction method showed the two SDs strongly negatively correlated in the posterior: each frog has exactly one Qiagen and one PrepMan swab, so the design identifies only their combined variance. Whether one extraction method is noisier than the other cannot be answered with this design.
 - **`d`, constant biases**: PrepMan extraction (vs Qiagen) and SNARL qPCR (vs RZ). The reference pipeline is Qiagen extraction with RZ qPCR.
 - **`s`, SNARL qPCR slope deviation**: SNARL's reading departs from RZ's by `d_snarl + s·(L − L_ref)`. `s > 0` means SNARL reads increasingly low as load drops below `L_ref` (the hypothesis: SNARL underestimates low loads, otherwise comparable); `s = 0` means a constant bias. `L_ref` is the median positive load in the experiment, so `d_snarl` is the bias at a typical load.
-- **`hu`, detection**: intercepts by population, extraction method, and qPCR lab, with a frog-level intercept correlated with the frog-level intercept in `L` (shared ID `g`), as in Model 1. Load-dependent detection enters through this correlation, so labs differ in baseline detection but share the detection-vs-load slope.
+- **`hu`, detection**: intercepts by extraction method and qPCR lab, with a frog-level intercept correlated with the frog-level intercept in `L` (shared ID `g`), as in Model 1. Load-dependent detection enters through this correlation, so labs differ in baseline detection but share the detection-vs-load slope.
 - **`sigma`, residual (qPCR) noise**, pooled across qPCR labs. Extract-level noise is in the swab effect, so the residual is qPCR noise. A first version estimated `sigma` by qPCR lab (SNARL ≈ 0.38, RZ ≈ 0.16 log10), but the design mainly identifies the *sum* of the two labs' qPCR noise (results 1 & 2 share an extract); separating them relied on single-result swabs, where qPCR noise is confounded with swab noise. RZ `sigma` had low ESS (205) and the fit had 5 divergent transitions, so lab-specific qPCR noise is treated as exploratory only.
+
+Not included: population (`collect_lab`) effects in `L` and `hu`. The focus is on extraction and qPCR lab differences, which are estimated within frogs; population differences in load and detection (Sierra frogs ≈ 2.4 log10 higher loads in an earlier version) are absorbed by the frog-level intercepts. An earlier version with `collect_lab` estimated PrepMan −0.38 log10 and SNARL qPCR +0.06 log10; these should change little.
 
 Not included: an extraction × qPCR interaction (e.g. PrepMan extracts behaving differently in RZ qPCR). All four pipeline combinations are observed, but each pair of combinations compares different frog populations (see README panel table), so an interaction would be confounded with population; left out of this first version.
 
@@ -87,7 +89,7 @@ m2_df = m2_df %>%
   mutate(L_ref = L_ref)
 
 m2_df %>%
-  group_by(collect_lab, extraction_method, qpcr_lab) %>%
+  group_by(extraction_method, qpcr_lab) %>%
   summarise(frogs = n_distinct(frog_id),
             results = n(),
             detected = mean(bd_load > 0),
@@ -142,7 +144,7 @@ m2_family = hurdle_lognormal()
 m2_formula = bf(
   bd_load ~ L + d + s * is_snarl_qpcr * (L - L_ref),
 
-  L ~ 1 + collect_lab +
+  L ~ 1 +
     (1 | g | frog_id) +
     (1 | bd_swab_id),
 
@@ -150,7 +152,7 @@ m2_formula = bf(
 
   s ~ 1,
 
-  hu ~ 1 + collect_lab + extraction_method + qpcr_lab +
+  hu ~ 1 + extraction_method + qpcr_lab +
     (1 | g | frog_id),
 
   sigma ~ 1,
@@ -161,7 +163,6 @@ m2_formula = bf(
 m2_priors = c(
   # L (ln copies per swab)
   prior(normal(7, 4), class = "b", nlpar = "L", coef = "Intercept"),
-  prior(normal(0, 3), class = "b", nlpar = "L", coef = "collect_labsnarl"),
   prior(normal(0, 3), class = "sd", nlpar = "L", group = "frog_id"),
   prior_string(paste0("normal(", swab_sd_m1["mean"], ", ", 2 * swab_sd_m1["sd"], ")"),
                class = "sd", nlpar = "L", group = "bd_swab_id"),
@@ -278,7 +279,7 @@ m2_effects %>%
 ```
 
 ### SNARL vs RZ qPCR
-Expected difference (SNARL − RZ, log10) in the reading of the same extract, across latent load: `d_snarl + s·(L − L_ref)`. A flat line at 0 means the labs agree; a line rising with load means SNARL underestimates low loads. Right: difference in detection probability at the population-average frog.
+Expected difference (SNARL − RZ, log10) in the reading of the same extract, across latent load: `d_snarl + s·(L − L_ref)`. A flat line at 0 means the labs agree; a line rising with load means SNARL underestimates low loads. Right: detection probability by pipeline at the average frog.
 ```{r m2-snarl-rz}
 #| code-fold: true
 #| code-summary: "Show SNARL vs RZ code"
@@ -304,7 +305,7 @@ p_mu = ggplot(qpcr_diff, aes(log10_load, med)) +
   labs(x = "latent log10(Bd load)", y = "SNARL − RZ qPCR (log10)") +
   theme_bw()
 
-# detection difference at the population-average frog, by pipeline (RZ-collected frogs)
+# detection probability at the average frog, by pipeline
 detect_df = m2_draws %>%
   transmute(.draw,
             qiagen_rz = 1 - plogis(b_hu_Intercept),
@@ -321,7 +322,7 @@ detect_df = m2_draws %>%
 p_hu = ggplot(detect_df, aes(pipeline, med)) +
   geom_linerange(aes(ymin = lo, ymax = hi)) +
   geom_point(size = 2.5) +
-  labs(x = "extraction – qPCR lab", y = "P(detected), average RZ-collected frog") +
+  labs(x = "extraction – qPCR lab", y = "P(detected), average frog") +
   theme_bw()
 
 p_mu + p_hu
@@ -346,7 +347,106 @@ ppc_stat_grouped(y = m2_df$bd_load, yrep = m2_yrep, group = m2_df$pipeline,
   labs(x = "median log10(Bd load) among positives")
 ```
 
-### Correction to a common scale
+### Model comparison: slope vs constant bias
+Model 2b is Model 2 without the SNARL qPCR slope `s` (constant biases only: $\mu = L + d$), otherwise identical (same data, priors, and settings). The models are compared by approximate leave-one-out cross-validation (PSIS-LOO). If the difference in expected log predictive density (`elpd_diff`) is small relative to its SE (roughly < 2 SE), the simpler constant-bias model is preferred.
+```{r m2b-fit}
+#| code-fold: true
+#| code-summary: "Show Model 2b fit code"
+#| results: hide
+
+m2b_formula = bf(
+  bd_load ~ L + d,
+
+  L ~ 1 +
+    (1 | g | frog_id) +
+    (1 | bd_swab_id),
+
+  d ~ 0 + is_prepman + is_snarl_qpcr,
+
+  hu ~ 1 + extraction_method + qpcr_lab +
+    (1 | g | frog_id),
+
+  sigma ~ 1,
+
+  nl = TRUE
+)
+
+# same priors, minus the slope
+m2b_priors = m2_priors[m2_priors$nlpar != "s", ]
+
+m2b = brm(
+  formula = m2b_formula,
+  data = m2_df,
+  family = m2_family,
+  prior = m2b_priors,
+  control = list(adapt_delta = 0.99),
+  chains = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 1234,
+  cores = 4,
+  backend = "cmdstanr",
+  file = here(fit_dir, "m2b_experiment_constant"),
+  file_refit = if (refit) "always" else "on_change"
+)
+
+# loo is stored in the saved fit files, so it is only computed once
+m2 = add_criterion(m2, "loo")
+m2b = add_criterion(m2b, "loo")
+```
+
+```{r m2-compare}
+#| code-fold: true
+#| code-summary: "Show Model comparison code"
+
+summary(m2b)
+
+# Pareto k diagnostics: values > 0.7 mean the LOO estimate for that result is unreliable
+tibble(model = c("m2 (slope)", "m2b (constant)"),
+       n_k_over_0.7 = c(sum(loo(m2)$diagnostics$pareto_k > 0.7),
+                        sum(loo(m2b)$diagnostics$pareto_k > 0.7))) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+
+loo_compare(m2, m2b) %>%
+  as.data.frame() %>%
+  rownames_to_column("model") %>%
+  select(model, elpd_diff, se_diff, elpd_loo, p_loo) %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+
+# constant correction to the Qiagen-RZ scale under Model 2b (log10 and multiplier)
+m2b_draws = as_draws_df(m2b) %>%
+  as_tibble()
+
+m2b_correction = m2b_draws %>%
+  transmute(prepman_snarl = -(b_d_is_prepman + b_d_is_snarl_qpcr) / log(10),
+            prepman_rz = -b_d_is_prepman / log(10),
+            qiagen_snarl = -b_d_is_snarl_qpcr / log(10))
+
+m2b_correction %>%
+  pivot_longer(everything(), names_to = "pipeline", values_to = "correction_log10") %>%
+  group_by(pipeline) %>%
+  summarise(median = median(correction_log10),
+            lo95 = quantile(correction_log10, 0.025),
+            hi95 = quantile(correction_log10, 0.975),
+            multiplier = 10^median,
+            multiplier_lo95 = 10^lo95,
+            multiplier_hi95 = 10^hi95,
+            .groups = "drop") %>%
+  kable(digits = 2, caption = "Model 2b: constant correction to Qiagen–RZ scale (add to log10 load, or multiply copies)") %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+
+# export constant correction draws (log10) for applying elsewhere
+saveRDS(list(draws = m2b_correction,
+             reference_pipeline = "qiagen_rz",
+             scale = "log10 correction to add to positive log10 loads",
+             import_date = import_date,
+             export_date = Sys.Date()),
+        here(fit_dir, "m2b_constant_correction_export.rds"))
+```
+
+### Correction to a common scale (Model 2, with slope)
 Conversion of a positive reading from any pipeline to the reference pipeline (Qiagen extraction, RZ qPCR). For a reading $y$ (ln scale) from a pipeline with extraction bias $d_\text{ext}$ (PrepMan only), qPCR bias $d_\text{q}$ and slope $s$ (SNARL qPCR only):
 
 $$y = L + d_\text{ext} + d_\text{q} + s(L - L_\text{ref}) \quad\Rightarrow\quad L = \frac{y - d_\text{ext} - d_\text{q} + s L_\text{ref}}{1 + s}$$
