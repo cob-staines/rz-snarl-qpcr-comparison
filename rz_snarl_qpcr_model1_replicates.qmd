@@ -1,13 +1,13 @@
 ---
-title: "rz_snarl_qpcr_modeling"
+title: "rz_snarl_qpcr_model1_replicates"
 author: "Cob Staines"
 format: html
 editor: visual
 ---
 
-# RZ-SNARL qPCR Comparison: Modeling
+# RZ-SNARL qPCR Comparison: Model 1 (Replicates)
 
-**Objective**: Model within-lab noise and detection (Model 1, replicates), then use these as priors for the between-lab extraction and qPCR comparison (Model 2, experiment).
+**Objective**: Model within-lab noise and detection from replicates. Posterior draws and summaries are exported for use as priors in Model 2 (`rz_snarl_qpcr_model2_experiment.qmd`).
 
 ## Setup
 
@@ -203,23 +203,28 @@ ppc_stat_grouped(y = m1_df$bd_load, yrep = m1_yrep, group = m1_df$ppc_group,
   labs(x = "median log10(Bd load) among positives")
 ```
 
-### Prior summaries for Model 2
-Posterior mean and SD of population-level effects, group-level SDs, and correlations, saved for use as priors in the experiment model.
-```{r m1-priors}
+### Export for Model 2
+Posterior draws and summaries (mean, SD, median, 95% interval) of population-level effects, group-level SDs, and correlations, saved to `fits/m1_replicates_export.rds` for use as priors in Model 2.
+```{r m1-export}
 #| code-fold: true
-#| code-summary: "Show Prior summaries code"
+#| code-summary: "Show Export code"
 
-m1_prior_summary = as_draws_df(m1) %>%
-  subset_draws(variable = c("^b_", "^sd_", "^cor_"), regex = TRUE) %>%
-  summarise_draws(mean, sd)
+m1_draws = as_draws_df(m1) %>%
+  subset_draws(variable = c("^b_", "^sd_", "^cor_"), regex = TRUE)
 
-saveRDS(m1_prior_summary, here(fit_dir, "m1_replicates_prior_summary.rds"))
+m1_summary = m1_draws %>%
+  summarise_draws(mean, sd, median,
+                  ~ quantile(.x, probs = c(0.025, 0.975)))
 
-m1_prior_summary %>%
+m1_export = list(summary = m1_summary,
+                 draws = m1_draws,
+                 formula = m1_formula,
+                 import_date = import_date,
+                 export_date = Sys.Date())
+
+saveRDS(m1_export, here(fit_dir, "m1_replicates_export.rds"))
+
+m1_summary %>%
   kable(digits = 3) %>%
   kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
 ```
-
-## Model 2: Experiment
-
-To be implemented (brms): latent true load per frog (group-level effect correlated across `mu`, `hu`, `sigma`); lab-specific extraction and qPCR effects on `mu` and `hu`, with priors on noise and detection informed by Model 1.

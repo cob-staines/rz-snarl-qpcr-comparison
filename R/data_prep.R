@@ -3,7 +3,7 @@
 #   snarl_clean, snarl_wide         experiment data, long & wide by frog
 #   db_clean                        database ITS1 results (experiment swabs excluded)
 #   qpcr_replicates_clean, swab_replicates_clean, replicates_clean, replicates_wide
-# Sourced by rz_snarl_qpcr_diagnostics.qmd and rz_snarl_qpcr_modeling.qmd
+# Sourced by the diagnostics and model qmd files
 
 librarian::shelf(tidyverse, here, janitor)
 

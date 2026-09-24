@@ -62,7 +62,7 @@ Bayesian hurdle-lognormal models in brms (cmdstanr backend) on Bd load (ITS1 cop
 Bd load within a population is generally modeled as a hurdle-lognormal quantity. Here, the goal is not to represent a population, but to compare relative values between control groups. The model must therefore handle zeros as non-detections (possibly load-dependent detection), rather than as true absence.
 
 Two-stage approach:
-1. **Model 1: Replicates**. Correlated group-level intercepts per replicate group in `mu` and `hu`; qPCR lab effect on `hu`; `sigma` by noise type (swab replicates: total noise; qPCR replicates: noise between qPCR re-runs). Posterior summaries are saved as priors for Model 2.
+1. **Model 1: Replicates**. Correlated group-level intercepts per replicate group in `mu` and `hu`; qPCR lab effect on `hu`; `sigma` by noise type (swab replicates: total noise; qPCR replicates: noise between qPCR re-runs). Posterior draws and summaries are exported for use as priors in Model 2.
    - Kept simple given limited replicates: a first version with a qPCR run (extract × plate) effect and a `sigma` group-level intercept (load-dependent noise) had 21 divergent transitions; neither term was identified (nearly every qPCR run was a single well; 2–3 positives per group).
    - First-version results: detection increases with load (`cor(mu, hu)` ≈ −0.55, 95% CI −0.91 to −0.04); swab noise ≈ 0.50 log10 per result; qPCR noise and SNARL detection (`hu_qpcr_labsnarl` −0.81 ± 1.84) are poorly informed by replicates and must be learned mainly from the experiment. Replicates cannot answer Key question 1.
 2. **Model 2: Experiment** (to be implemented). Latent load per frog; lab-specific extraction and qPCR effects on `mu` and `hu`; priors on noise and detection informed by Model 1.
@@ -76,12 +76,13 @@ Two-stage approach:
 Rendered output (`*.html`, `*_files/`) and fitted models are not tracked in git. Fitted models are saved to `$data_dir/bd_qpcr_results/rz_snarl_qpcr_comparison/fits/`.
 
 - `R/data_import.R`: pulls experiment data (xlsx) and database results, and saves them to `rz_snarl_qpcr_raw_data.RData` in the data directory. Run once, and again whenever source data change (only step needing a database connection).
-- `R/data_prep.R`: loads the saved raw data and builds cleaned experiment (`snarl_clean`, `snarl_wide`) and replicate (`replicates_clean`, etc.) tables. Sourced by both qmd files.
+- `R/data_prep.R`: loads the saved raw data and builds cleaned experiment (`snarl_clean`, `snarl_wide`) and replicate (`replicates_clean`, etc.) tables. Sourced by all qmd files.
 - `rz_snarl_qpcr_diagnostics.qmd`: data exploration and diagnostics.
   - **Experiment data**: Bd load by frog, wide across extraction method × qPCR lab.
   - **Data Summary**: pairwise scatter of experiment Bd loads across extraction method × qPCR lab (panels A–E).
   - **Replicate Variability**: all within-group replicate pairs, faceted by qPCR lab × replicate type, kept separate from the experiment data. Used to assess whether replicate variability can be pooled across labs.
   - **Replicate Diagnostics**: pair agreement (detection outcomes, SD of log10 differences) for experiment panels vs replicates; swab replicate group checks (sample types, name conflicts, plates, projects); largest swab disagreements; difference vs. mean (Bland–Altman) plots to test whether noise depends on load and population.
-- `rz_snarl_qpcr_modeling.qmd`: model fitting and results. Set `refit = TRUE` in the setup chunk to refit; otherwise saved fits are loaded.
-  - **Model 1: Replicates**: model data, structure (family, formula, priors), fit, convergence & correlations, detection & noise vs. latent load, posterior predictive checks, prior summaries for Model 2.
-  - **Model 2: Experiment**: placeholder.
+- `rz_snarl_qpcr_model1_replicates.qmd`: Model 1 (replicates). Model data, structure (family, formula, priors), fit, convergence & correlations, detection & noise, posterior predictive checks. Exports posterior draws and summaries of population-level effects, group-level SDs, and correlations to `fits/m1_replicates_export.rds`.
+- `rz_snarl_qpcr_model2_experiment.qmd`: Model 2 (experiment). Reads the Model 1 export (render Model 1 first; warns if Model 1 was fit on an older data import). Model itself to be implemented.
+
+In both model files, set `refit = TRUE` in the setup chunk to force a refit; otherwise saved fits are loaded (brms refits automatically if the formula or data change).

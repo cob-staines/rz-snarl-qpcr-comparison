@@ -1,0 +1,56 @@
+---
+title: "rz_snarl_qpcr_model2_experiment"
+author: "Cob Staines"
+format: html
+editor: visual
+---
+
+# RZ-SNARL qPCR Comparison: Model 2 (Experiment)
+
+**Objective**: Quantify between-lab differences in extraction and qPCR from the crossed experiment, with priors on noise and detection informed by Model 1 (`rz_snarl_qpcr_model1_replicates.qmd`).
+
+## Setup
+
+Load packages; load and clean experiment and replicate data (`R/data_prep.R`, from data saved by `R/data_import.R`)
+
+```{r setup}
+#| code-fold: true
+#| code-summary: "Show Setup code"
+#| results: hide
+librarian::shelf(tidyverse, here, knitr, kableExtra, ggplot2, patchwork, brms, cmdstanr, posterior, bayesplot)
+
+cmdstanr::check_cmdstan_toolchain()   # confirms Stan is found
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+
+source(here("R", "data_prep.R"))
+
+# fitted models are saved outside the repo
+fit_dir = here(wddir, "fits")
+dir.create(fit_dir, showWarnings = FALSE)
+
+# set TRUE to refit models instead of loading saved fits
+refit = FALSE
+```
+
+## Model 1 results
+Posterior summaries exported by Model 1 (`fits/m1_replicates_export.rds`); render Model 1 first.
+```{r m1-import}
+#| code-fold: true
+#| code-summary: "Show Model 1 import code"
+
+m1_export = readRDS(here(fit_dir, "m1_replicates_export.rds"))
+m1_summary = m1_export$summary
+m1_draws = m1_export$draws
+
+if (m1_export$import_date != import_date) {
+  warning("Model 1 was fit on data imported ", m1_export$import_date,
+          "; current data imported ", import_date, ". Consider re-rendering Model 1.")
+}
+
+m1_summary %>%
+  kable(digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+## Model 2: Experiment
+To be implemented (brms): latent true load per frog (group-level intercept correlated across `mu` and `hu`); lab-specific extraction and qPCR effects on `mu` and `hu`, with priors on noise and detection informed by Model 1.
