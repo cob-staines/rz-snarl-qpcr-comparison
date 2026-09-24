@@ -59,7 +59,7 @@ For positive results, the expected log load is
 
 $$\mu = L + d + s \cdot \text{SNARL qPCR} \cdot (L - L_\text{ref})$$
 
-- **`L`, latent swab load**: population (`collect_lab`) effect, a frog-level intercept (the frog's true load), and a swab-level intercept (swab + extraction noise; shared by results 1 & 2, which share an extract), with a separate SD per extraction method.
+- **`L`, latent swab load**: population (`collect_lab`) effect, a frog-level intercept (the frog's true load), and a swab-level intercept (swab + extraction noise; shared by results 1 & 2, which share an extract), with an SD pooled across extraction methods. A version with a separate SD per extraction method showed the two SDs strongly negatively correlated in the posterior: each frog has exactly one Qiagen and one PrepMan swab, so the design identifies only their combined variance. Whether one extraction method is noisier than the other cannot be answered with this design.
 - **`d`, constant biases**: PrepMan extraction (vs Qiagen) and SNARL qPCR (vs RZ). The reference pipeline is Qiagen extraction with RZ qPCR.
 - **`s`, SNARL qPCR slope deviation**: SNARL's reading departs from RZ's by `d_snarl + s·(L − L_ref)`. `s > 0` means SNARL reads increasingly low as load drops below `L_ref` (the hypothesis: SNARL underestimates low loads, otherwise comparable); `s = 0` means a constant bias. `L_ref` is the median positive load in the experiment, so `d_snarl` is the bias at a typical load.
 - **`hu`, detection**: intercepts by population, extraction method, and qPCR lab, with a frog-level intercept correlated with the frog-level intercept in `L` (shared ID `g`), as in Model 1. Load-dependent detection enters through this correlation, so labs differ in baseline detection but share the detection-vs-load slope.
@@ -144,7 +144,7 @@ m2_formula = bf(
 
   L ~ 1 + collect_lab +
     (1 | g | frog_id) +
-    (1 | gr(bd_swab_id, by = extraction_method)),
+    (1 | bd_swab_id),
 
   d ~ 0 + is_prepman + is_snarl_qpcr,
 
@@ -232,8 +232,8 @@ cat("Divergent transitions:", sum(m2_np$Value[m2_np$Parameter == "divergent__"])
 
 mcmc_pairs(as.array(m2), np = m2_np,
            pars = c("b_sigma_Intercept",
-                    "sd_bd_swab_id__L_Intercept:extraction_methodqiagen",
-                    "sd_bd_swab_id__L_Intercept:extraction_methodprepman",
+                    "sd_bd_swab_id__L_Intercept",
+                    "sd_frog_id__L_Intercept",
                     "b_d_is_snarl_qpcr",
                     "b_s_Intercept"),
            off_diag_args = list(size = 0.5, alpha = 0.3))
@@ -247,7 +247,7 @@ Key effects, converted to log10 where on the load scale (posterior median, 95% i
 - `s`: SNARL qPCR slope deviation (unitless; `> 0` = SNARL reads increasingly low below `L_ref`).
 - `hu_*`: detection differences (logit scale of P(zero); `> 0` = more zeros).
 - `sigma`: residual qPCR noise SD, pooled across labs (log10).
-- `sd_swab_*`: swab + extraction noise SD by extraction method (log10).
+- `sd_swab`: swab + extraction noise SD, pooled across extraction methods (log10).
 ```{r m2-effects}
 #| code-fold: true
 #| code-summary: "Show Lab differences code"
@@ -262,8 +262,7 @@ m2_effects = m2_draws %>%
             hu_prepman = b_hu_extraction_methodprepman,
             hu_snarl_qpcr = b_hu_qpcr_labsnarl,
             sigma = exp(b_sigma_Intercept) / log(10),
-            across(starts_with("sd_bd_swab_id__L_Intercept"), ~ .x / log(10),
-                   .names = "sd_swab_{str_remove(.col, 'sd_bd_swab_id__L_Intercept:extraction_method')}"),
+            sd_swab = sd_bd_swab_id__L_Intercept / log(10),
             cor_L_hu = cor_frog_id__hu_Intercept__L_Intercept)
 
 m2_effects %>%
