@@ -1,0 +1,219 @@
+---
+title: "rz_snarl_qpcr_modeling"
+author: "Cob Staines"
+format: html
+editor: visual
+---
+
+# RZ-SNARL qPCR Comparison: Modeling
+
+**Objective**: Model within-lab noise and detection (Model 1, replicates), then use these as priors for the between-lab extraction and qPCR comparison (Model 2, experiment).
+
+## Setup
+
+Load packages; load and clean experiment and replicate data (`R/data_prep.R`)
+
+```{r setup}
+#| code-fold: true
+#| code-summary: "Show Setup code"
+#| results: hide
+librarian::shelf(tidyverse, here, knitr, kableExtra, ggplot2, patchwork, brms, cmdstanr, posterior)
+
+cmdstanr::check_cmdstan_toolchain()   # confirms Stan is found
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+
+source(here("R", "data_prep.R"))
+
+# fitted models are saved outside the repo
+fit_dir = here(wddir, "fits")
+dir.create(fit_dir, showWarnings = FALSE)
+
+# set TRUE to refit models instead of loading saved fits
+refit = FALSE
+```
+
+## Model 1: Replicates
+Within-lab noise and detection as a function of load, as a brms hurdle-lognormal model (cmdstanr backend).
+
+- **Latent load**: each replicate group (a capture for swab replicates, an extract for qPCR replicates) has a group-level intercept in `mu`, i.e. its true (log) load.
+- **Detection**: `hu` (probability of a zero) has a qPCR lab effect and a group-level intercept. The group-level intercepts of `mu`, `hu`, and `sigma` are correlated (shared ID `g`), so the `mu`–`hu` correlation captures load-dependent detection (expected negative: higher load, fewer zeros).
+- **Noise**: `sigma` differs by noise type (swab replicate: total noise; qPCR replicate: within-plate well noise), with a group-level intercept correlated with `mu`, capturing load-dependent noise.
+- **qPCR runs**: qPCR replicates get a run (extract × qPCR plate) effect in `mu`, shared by wells on the same plate. Swab replicates have no run effect (`0 + is_qpcr` slope is zero for them).
+
+`mu` and `sigma` are on the natural-log scale of Bd load (ITS1 copies per swab); results are converted to log10 for plots.
+
+### Model data
+```{r m1-data}
+#| code-fold: true
+#| code-summary: "Show Model data code"
+
+m1_df = replicates_clean %>%
+  mutate(qpcr_lab = factor(qpcr_lab, levels = c("rz", "snarl")),
+         noise_type = factor(replicate_type, levels = c("swab", "qpcr")),
+         is_qpcr = as.integer(replicate_type == "qpcr"),
+         # run (extract x qPCR plate); swab results get their own key, unused since is_qpcr = 0
+         run_key = if_else(replicate_type == "qpcr",
+                           paste(replicate_group, qpcr_plate_name, sep = "_"),
+                           paste(replicate_group, bd_swab_id, sep = "_")),
+         ppc_group = paste(replicate_type, qpcr_lab))
+
+m1_df %>%
+  group_by(replicate_type, qpcr_lab) %>%
+  summarise(groups = n_distinct(replicate_group),
+            results = n(),
+            runs = n_distinct(run_key[is_qpcr == 1]),
+            detected = mean(bd_load > 0),
+            .groups = "drop") %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+### Model structure
+```{r m1-structure}
+#| code-fold: true
+#| code-summary: "Show Model structure code"
+
+m1_family = hurdle_lognormal()
+
+m1_formula = bf(
+  bd_load ~ 1 +
+    (1 | g | replicate_group) +
+    (0 + is_qpcr | run_key),
+
+  hu ~ 1 + qpcr_lab +
+    (1 | g | replicate_group),
+
+  sigma ~ 0 + noise_type +
+    (1 | g | replicate_group)
+)
+
+m1_priors = c(
+  # mu (ln copies per swab)
+  prior(normal(7, 4), class = "Intercept"),
+
+  # hu
+  prior(normal(0, 2), class = "Intercept", dpar = "hu"),
+  prior(normal(0, 2), class = "b", dpar = "hu"),
+
+  # sigma (log of ln-scale SD)
+  prior(normal(0, 1), class = "b", dpar = "sigma"),
+
+  # group-level effects
+  prior(exponential(1), class = "sd"),
+  prior(lkj(2), class = "cor")
+)
+```
+
+### Fit
+Fit is saved to `fits/` in the data directory and reloaded unless `refit = TRUE`.
+```{r m1-fit}
+#| code-fold: true
+#| code-summary: "Show Fit code"
+#| results: hide
+
+m1 = brm(
+  formula = m1_formula,
+  data = m1_df,
+  family = m1_family,
+  prior = m1_priors,
+  control = list(adapt_delta = 0.95),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 1234,
+  cores = 4,
+  backend = "cmdstanr",
+  file = here(fit_dir, "m1_replicates"),
+  file_refit = if (refit) "always" else "on_change"
+)
+```
+
+### Convergence & summary
+```{r m1-summary}
+#| code-fold: true
+#| code-summary: "Show Summary code"
+
+summary(m1)
+
+# group-level correlations: mu-hu (detection vs load) and mu-sigma (noise vs load)
+posterior_summary(m1, variable = "^cor_replicate_group", regex = TRUE) %>%
+  as.data.frame() %>%
+  rownames_to_column("term") %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+### Detection and noise vs. load
+Posterior median of each replicate group's latent load against its detection probability and noise SD (run effects excluded).
+```{r m1-curves}
+#| code-fold: true
+#| code-summary: "Show Curves code"
+#| fig-width: 9
+#| fig-height: 4
+
+m1_groups = m1_df %>%
+  distinct(replicate_group, .keep_all = TRUE)
+
+group_re = ~ (1 | g | replicate_group)
+
+m1_group_est = m1_groups %>%
+  mutate(
+    log10_load = apply(posterior_linpred(m1, newdata = m1_groups, dpar = "mu",
+                                         re_formula = group_re), 2, median) / log(10),
+    p_detect = 1 - apply(posterior_linpred(m1, newdata = m1_groups, dpar = "hu",
+                                           re_formula = group_re, transform = TRUE), 2, median),
+    sigma_log10 = apply(posterior_linpred(m1, newdata = m1_groups, dpar = "sigma",
+                                          re_formula = group_re, transform = TRUE), 2, median) / log(10))
+
+p_det = ggplot(m1_group_est, aes(log10_load, p_detect, colour = qpcr_lab)) +
+  geom_point(alpha = 0.6) +
+  labs(x = "latent log10(Bd load)", y = "P(detected)", colour = "qPCR lab") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+p_sig = ggplot(m1_group_est, aes(log10_load, sigma_log10, colour = noise_type)) +
+  geom_point(alpha = 0.6) +
+  labs(x = "latent log10(Bd load)", y = "noise SD (log10)", colour = "noise type") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+p_det + p_sig
+```
+
+### Posterior predictive checks
+Share of results detected, and median positive log10 load, by replicate type × qPCR lab.
+```{r m1-ppc}
+#| code-fold: true
+#| code-summary: "Show PPC code"
+#| fig-width: 8
+#| fig-height: 4
+
+pp_check(m1, type = "stat_grouped", group = "ppc_group", ndraws = 500,
+         stat = function(y) mean(y > 0)) +
+  labs(x = "share detected")
+
+pp_check(m1, type = "stat_grouped", group = "ppc_group", ndraws = 500,
+         stat = function(y) median(log10(y[y > 0]))) +
+  labs(x = "median log10(Bd load) among positives")
+```
+
+### Prior summaries for Model 2
+Posterior mean and SD of population-level effects, group-level SDs, and correlations, saved for use as priors in the experiment model.
+```{r m1-priors}
+#| code-fold: true
+#| code-summary: "Show Prior summaries code"
+
+m1_prior_summary = as_draws_df(m1) %>%
+  subset_draws(variable = c("^b_", "^sd_", "^cor_"), regex = TRUE) %>%
+  summarise_draws(mean, sd)
+
+saveRDS(m1_prior_summary, here(fit_dir, "m1_replicates_prior_summary.rds"))
+
+m1_prior_summary %>%
+  kable(digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+## Model 2: Experiment
+
+To be implemented (brms): latent true load per frog (group-level effect correlated across `mu`, `hu`, `sigma`); lab-specific extraction and qPCR effects on `mu` and `hu`, with priors on noise and detection informed by Model 1.

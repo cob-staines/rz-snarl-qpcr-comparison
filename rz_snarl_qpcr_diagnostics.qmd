@@ -1,195 +1,48 @@
 ---
-title: "rz_snarl_qpcr_comparison"
+title: "rz_snarl_qpcr_diagnostics"
 author: "Cob Staines"
 format: html
 editor: visual
 ---
 
-# RZ-SNARL qPCR Comparison
+# RZ-SNARL qPCR Comparison: Data & Diagnostics
 
 **Objective**: Quantify diferences in Bd qPCR quantities between extraction and qPCR methods between RZ and SNARL labs.
 
-
 ## Setup
-Load packages, set up working directory, establish database connection
+
+Load packages; load and clean experiment and replicate data (`R/data_prep.R`)
+
 ```{r setup}
 #| code-fold: true
 #| code-summary: "Show Setup code"
 #| results: hide
-librarian::shelf(tidyverse, dbplyr, here, janitor, rio, ggplot2, knitr, kableExtra, RPostgres, DBI, RIBBiTR-BII/ribbitrrr)
+librarian::shelf(tidyverse, here, knitr, kableExtra, ggplot2)
 
-wddir = here(Sys.getenv("data_dir"), "bd_qpcr_results", "rz_snarl_qpcr_comparison")
-
-# establish database connection
-dbcon = hopToDB("railway", hopReg = FALSE)
-
+# loads experiment data (qpcr_compare_data_260904.xlsx) and RIBBiTR database replicates,
+# builds snarl_clean, snarl_wide, db_clean, *_replicates_clean, replicates_clean, replicates_wide
+source(here("R", "data_prep.R"))
 ```
 
-## Load data
-- Pull in experiment data from data file: `qpcr_compare_data_260904.xlsx`
-- Pull in ITS1 Bd results from both labs from the RIBBiTR database (source of within-lab replicates)
-```{r load}
-# load data
-snarl_raw = import(here(wddir, "qpcr_compare_data_260904.xlsx"),
-                   na = c("NA", "NaN"))
+## Experiment data
 
-# results from database
-db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
-db_sample = tbl(dbcon, Id("survey_data", "sample"))
-db_capture = tbl(dbcon, Id("survey_data", "capture"))
-db_survey = tbl(dbcon, Id("survey_data", "survey"))
-db_visit = tbl(dbcon, Id("survey_data", "visit"))
-db_site = tbl(dbcon, Id("survey_data", "site"))
+Bd load by frog, wide across extraction method × qPCR lab
 
-# filter before counting replicates, so replicate counts reflect usable results only
-bd_results = db_bd %>%
-  inner_join(db_sample, by = "sample_id") %>%
-  inner_join(db_capture, by = "capture_id") %>%
-  left_join(db_survey %>% select(survey_id, visit_id), by = "survey_id") %>%
-  left_join(db_visit %>% select(visit_id, date, site_id, project_id), by = "visit_id") %>%
-  left_join(db_site %>% select(site_id, site), by = "site_id") %>%
-  filter(ipc_pass | is.na(ipc_pass),
-         standard_target_type == "ITS1",
-         !is.na(bd_its1_copies_per_swab),
-         qpcr_lab %in% c("snarl", "rz_lab")) %>%
-  select(result_id,
-         sample_id,
-         capture_id,
-         sample_name_bd,
-         bd_cycle_quant,
-         bd_target_quant,
-         bd_its1_copies_per_swab,
-         extraction_plate_name,
-         extraction_lab,
-         qpcr_plate_name,
-         qpcr_lab,
-         extraction_kit,
-         taxon_capture,
-         comments_qpcr,
-         # metadata for replicate diagnostics
-         sample_type,
-         sample_name_conflict,
-         swab_type,
-         qpcr_well_replicates = replicates,
-         extraction_date,
-         qpcr_date,
-         visit_date = date,
-         site,
-         project_id) %>%
-  collect()
-
-dbDisconnect(dbcon)
-```
-
-## Clean & Pivot
-Clean column names, then pivot Bd load values wide by Frog ID
-```{r clean}
+```{r experiment-table}
 #| code-fold: true
-#| code-summary: "Show Clean & Pivot code"
-#| 
-snarl_clean = snarl_raw %>%
-  clean_names() %>%
-  rename(extraction_lab = lab_extract,
-         extraction_method = extract_method,
-         qpcr_lab = lab_qpcr,
-         bd_quant_cycle = quant_cycle,
-         bd_start_quant = start_quant,
-         frog_id = frog_num) %>%
-  mutate(extraction_lab = recode_values(extraction_lab,
-                                        "pitt" ~ "rz",
-                                        "snarl" ~ "snarl",
-                                        default = NA),
-         collect_lab = recode_values(collect_lab,
-                                     "pitt" ~ "rz",
-                                     "snarl" ~ "snarl",
-                                     default = NA),
-         qpcr_lab = recode_values(qpcr_lab,
-                                  "pitt" ~ "rz",
-                                  "snarl" ~ "snarl",
-                                  default = NA),
-         frog_id = as.character(frog_id),
-         src = "snarl")
-
-# catch unexpected lab values silently recoded to NA
-stopifnot(!anyNA(snarl_clean$extraction_lab),
-          !anyNA(snarl_clean$collect_lab),
-          !anyNA(snarl_clean$qpcr_lab))
-
-snarl_wide = snarl_clean %>%
-  pivot_wider(id_cols = c("frog_id", "collect_lab"),
-              names_from = c("extraction_method", "qpcr_lab"),
-              values_from = "bd_load")
-
-# database results, excluding experiment swabs so they are not double-counted as replicates
-db_clean = bd_results %>%
-  filter(!sample_name_bd %in% snarl_clean$bd_swab_id) %>%
-  rename(bd_swab_id = sample_name_bd,
-         bd_quant_cycle = bd_cycle_quant,
-         bd_start_quant = bd_target_quant,
-         bd_load = bd_its1_copies_per_swab,
-         notes = comments_qpcr) %>%
-  mutate(extraction_lab = recode_values(extraction_lab,
-                                        "rz_lab" ~ "rz",
-                                        default = extraction_lab),
-         qpcr_lab = recode_values(qpcr_lab,
-                                  "rz_lab" ~ "rz",
-                                  default = qpcr_lab),
-         extraction_method = recode_values(extraction_kit,
-                                           "qiagen_dneasy" ~ "qiagen",
-                                           default = extraction_kit),
-         collect_lab = NA_character_,  # not recorded in db; not used for replicates
-         frog_id = capture_id,
-         src = "db",
-         species_capture = str_to_sentence(gsub("_", " ", taxon_capture)))
-
-# qPCR replicates: same extract (swab + extraction plate) run more than once within a qPCR lab
-qpcr_replicates_clean = db_clean %>%
-  group_by(bd_swab_id, extraction_plate_name, qpcr_lab) %>%
-  filter(n() > 1) %>%
-  mutate(replicate_type = "qpcr",
-         replicate_group = paste(bd_swab_id, extraction_plate_name, qpcr_lab, sep = "_"),
-         replicate_id = row_number()) %>%
-  ungroup()
-
-# swab replicates: multiple swabs from the same capture, through the same extraction & qPCR lab
-swab_replicates_clean = db_clean %>%
-  # keep one result per swab (first qPCR plate), so qPCR re-runs are not counted as swab replicates
-  arrange(qpcr_plate_name) %>%
-  group_by(bd_swab_id, extraction_lab, extraction_method, qpcr_lab) %>%
-  slice_head(n = 1) %>%
-  group_by(capture_id, extraction_lab, extraction_method, qpcr_lab) %>%
-  filter(n() > 1) %>%
-  mutate(replicate_type = "swab",
-         replicate_group = paste(capture_id, extraction_lab, qpcr_lab, sep = "_"),
-         replicate_id = row_number()) %>%
-  ungroup()
-
-replicates_clean = bind_rows(qpcr_replicates_clean,
-                             swab_replicates_clean) %>%
-  select(all_of(colnames(snarl_clean)),
-         qpcr_plate_name,
-         project_id,
-         replicate_type,
-         replicate_group,
-         replicate_id)
-
-replicates_wide = replicates_clean %>%
-  pivot_wider(id_cols = c("replicate_type", "replicate_group", "frog_id",
-                          "extraction_method", "qpcr_lab"),
-              names_from = "replicate_id",
-              values_from = "bd_load")
-
+#| code-summary: "Show table code"
 kable(snarl_wide, digits = 2) %>%
   kable_styling(bootstrap_options = c("striped", "condensed"),
                 full_width = TRUE,
                 font_size = 12,
                 fixed_thead = TRUE) %>%
   scroll_box(height = "400px")
-
 ```
 
 ## Data Summary
+
 Pairwise comparisons of Bd load across extraction method (Qiagen = RZ, PrepMan = SNARL) and qPCR lab. Panels A & B share an extract (qPCR effect only); panels C–E compare different swabs, so they also include swab-to-swab variability.
+
 ```{r summary}
 #| code-fold: true
 #| code-summary: "Show Data Summary code"
@@ -248,7 +101,9 @@ ggplot(plot_df, aes(log10(x + 1), log10(y + 1))) +
 ```
 
 ## Replicate Variability
+
 Within-lab replicate pairs by qPCR lab and replicate type, to assess whether replicate variability is comparable between labs (i.e. whether replicates can be pooled across labs).
+
 ```{r replicates}
 #| code-fold: true
 #| code-summary: "Show Replicate Variability code"
@@ -304,10 +159,13 @@ ggplot(rep_plot_df, aes(log10(x + 1), log10(y + 1))) +
 ```
 
 ## Replicate Diagnostics
+
 Swab replicates appear more variable than the different-swab experiment comparisons (panels C–E). These diagnostics check whether that is real variability, or an artifact of how replicate groups are defined (non-duplicate swabs, name conflicts, batch/plate effects, specific projects or sites).
 
 ### Pair agreement
+
 Share of pairs by detection outcome, and SD of the log10 difference among pairs where both are positive. Replicates are split by whether the pair was run on the same qPCR plate (for qPCR replicates, same plate = technical well replicates).
+
 ```{r diag-pairs}
 #| code-fold: true
 #| code-summary: "Show Pair agreement code"
@@ -343,7 +201,9 @@ bind_rows(experiment_agreement, replicate_agreement) %>%
 ```
 
 ### Swab replicate groups
+
 Per capture × pipeline group: number of swabs, sample types, name conflicts, number of extraction & qPCR plates, and spread of loads.
+
 ```{r diag-swab-groups}
 #| code-fold: true
 #| code-summary: "Show Swab replicate groups code"
@@ -398,7 +258,9 @@ swab_groups %>%
 ```
 
 ### Largest swab replicate disagreements
+
 Individual swabs from the 15 groups with the largest load range.
+
 ```{r diag-swab-worst}
 #| code-fold: true
 #| code-summary: "Show Largest disagreements code"
@@ -421,7 +283,9 @@ swab_replicates_clean %>%
 ```
 
 ### Difference vs. mean
+
 Bland–Altman style: difference in log10(Bd load + 1) between the two members of each pair, against their mean. Lines are smoothed mean absolute differences. If spread shrinks with load and populations/projects follow the same curve, the differences between panels are explained by load rather than population or lab.
+
 ```{r diag-bland-altman}
 #| code-fold: true
 #| code-summary: "Show Difference vs. mean code"
@@ -478,6 +342,7 @@ ggplot(ba_df, aes(mean_log, diff_log, colour = group)) +
 ```
 
 Overlay of the different-swab comparisons only (experiment C–E and swab replicates), to compare noise-vs-load curves directly.
+
 ```{r diag-bland-altman-overlay}
 #| code-fold: true
 #| code-summary: "Show overlay code"
