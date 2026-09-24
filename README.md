@@ -3,6 +3,27 @@
 ## Objective
 Analyze Bd qPCR results from a crossed experimental design to identify quantitative biases between extraction methods and qPCR methods between the two labs (RZ & SNARL), ideally to arrive at a formula to make quantities from the two labs comparable (if they are not already).
 
+## Conversion rule (summary)
+From Model 2b (constant bias; see Methods). To put a **positive** Bd load (ITS1 copies per swab) from the SNARL pipeline (PrepMan extraction + SNARL qPCR) on the RZ pipeline scale (Qiagen extraction + RZ qPCR):
+
+**log10(load_RZ) = log10(load_SNARL) + 0.27** (95% CI 0.02 to 0.52), i.e. **copies × 1.9** (1.1 to 3.3)
+
+| From pipeline | log10 correction (95% CI) | Multiplier (95% CI) |
+|---|---|---|
+| PrepMan + SNARL qPCR | +0.27 (0.02, 0.52) | 1.88 (1.06, 3.32) |
+| PrepMan + RZ qPCR | +0.32 (0.07, 0.57) | 2.08 (1.17, 3.69) |
+| Qiagen + SNARL qPCR | −0.04 (−0.18, 0.09) | 0.91 (0.66, 1.24) |
+
+- The difference comes from **extraction** (PrepMan reads ≈ 0.32 log10 lower than Qiagen); **qPCR labs agree** on positive quantities (SNARL − RZ ≈ +0.04 log10, 95% CI −0.10 to +0.18), with no evidence of a load-dependent qPCR bias.
+- **Zeros cannot be converted.** PrepMan (`hu` +1.37, 95% CI 0.21 to 2.61) and, less certainly, SNARL qPCR (`hu` +0.83, −0.27 to 2.03) produce more non-detects, so a SNARL-pipeline zero is weaker evidence of absence, and prevalence from SNARL data will be biased low, especially at low loads.
+- The correction is on the log scale (a shift in the median), for use in log-scale analyses. It is specific to these labs' current protocols and plasmid standards.
+- Posterior draws of the corrections: `fits/m2b_constant_correction_export.rds` (data directory).
+
+### Key questions, answered
+1. **Between-replicate variability by lab**: not answerable. Replicates exist almost only for RZ; in the experiment, only the combined qPCR noise of the two labs (pooled ≈ 0.29 log10 per result) and the combined swab + extraction noise of the two methods (≈ 0.40 log10) are identified.
+2. **qPCR step**: no significant difference in positive quantities; possibly more non-detects at SNARL (borderline).
+3. **Extraction step**: PrepMan yields ≈ 0.32 log10 (≈ 2×) fewer copies than Qiagen and more non-detects. Whether the methods differ in noise cannot be determined with this design.
+
 ## Data
 
 ### Experiment data
@@ -74,7 +95,8 @@ Two-stage approach:
    - `sigma`: residual (qPCR) noise, pooled across labs. A first version with `sigma` by qPCR lab (SNARL ≈ 0.38, RZ ≈ 0.16 log10) was weakly identified (the design mainly identifies the sum of the two labs' qPCR noise; RZ `sigma` ESS 205; 5 divergences), so lab-specific qPCR noise is exploratory only.
    - **No population (`collect_lab`) effects**: the focus is on extraction and qPCR lab differences, estimated within frogs; population differences in load and detection are absorbed by the frog-level intercepts. With `collect_lab` included (and pooled `sigma` and swab SD), estimates were: PrepMan −0.38 log10 (95% CI −0.65 to −0.10); SNARL qPCR +0.06 log10 (−0.08 to +0.20); `s` 0.05 (−0.04 to 0.14); qPCR noise 0.28 and swab noise 0.40 log10; no divergences.
    - **Model 2b (constant bias)**: Model 2 without `s`. Compared with Model 2 by PSIS-LOO; if comparable (`elpd_diff` < ~2 SE), the constant-bias model is preferred and the correction to the Qiagen–RZ scale is a single constant per pipeline (exported to `fits/m2b_constant_correction_export.rds`). Expected from earlier fits: SNARL/PrepMan → RZ/Qiagen ≈ +0.32 log10 (≈ 2.1×).
-   - **LOO result**: `elpd_diff` = −0.6 (SE 2.5) for Model 2b vs Model 2, i.e. no detectable difference in predictive performance. The slope adds nothing, so **Model 2b (constant bias) is preferred**: there is no evidence of a load-dependent SNARL qPCR bias.
+   - **LOO result**: `elpd_diff` = −0.6 (SE 2.5) for Model 2b vs Model 2, i.e. no detectable difference in predictive performance. The slope adds nothing, so **Model 2b (constant bias) is preferred**: there is no evidence of a load-dependent SNARL qPCR bias. Caveat: 39 (Model 2) and 34 (Model 2b) of 237 results had Pareto k > 0.7, so the LOO estimates are not fully reliable (expected with only 2–3 results per frog, since leaving one out shifts the frog-level effects). The conclusion is also supported by the posterior of `s` in Model 2 (0.05, 95% CI −0.04 to 0.14).
+   - **Model 2b estimates** (log10): PrepMan −0.32 (95% CI −0.57 to −0.07); SNARL qPCR +0.04 (−0.10 to +0.18); `hu` PrepMan +1.37 (0.21 to 2.61), SNARL qPCR +0.83 (−0.27 to 2.03); qPCR noise ≈ 0.29.
    - **No extraction × qPCR interaction**: all four pipelines are observed, but each pair compares different frog populations (see panel table), so an interaction would be confounded with population.
    - **First-version results** (lab-specific `sigma`): PrepMan reads ≈ 0.50 log10 lower than Qiagen (95% CI 0.20–0.78) and has more non-detects; no evidence of a SNARL qPCR bias (≈ +0.10 log10, CI −0.05 to +0.26) or slope (`s` = 0.05, CI −0.04 to 0.14); SNARL qPCR has borderline more non-detects (`hu` +1.06, CI −0.04 to 2.20). The hypothesis is partly supported: SNARL qPCR does not under-quantify positives but may miss more low-load samples.
    - **Correction to a common scale**: positive readings from any pipeline are converted to the reference (Qiagen + RZ) scale by inverting the model, `L = (y − d_ext − d_q + s·L_ref) / (1 + s)`; correction parameter draws and `L_ref` are exported to `fits/m2_correction_export.rds`. Zeros cannot be corrected.
