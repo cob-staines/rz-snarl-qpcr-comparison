@@ -41,7 +41,7 @@ kable(snarl_wide, digits = 2) %>%
 
 ## Data Summary
 
-Pairwise comparisons of Bd load across extraction method (Qiagen = RZ, PrepMan = SNARL) and qPCR lab. Panels A & B share an extract (qPCR effect only); panels C–E compare different swabs, so they also include swab-to-swab variability.
+Pairwise comparisons of Bd load across extraction method (Qiagen = RZ, PrepMan = SNARL) and qPCR lab. Panels A & B share an extract (qPCR effect only); panels C–E compare different swabs, so they also include swab-to-swab variability. In each panel, the pipeline named on the left is on the vertical axis and the pipeline named at the bottom is on the horizontal axis.
 
 ```{r summary}
 #| code-fold: true
@@ -78,7 +78,8 @@ stats_df <- plot_df %>%
   summarise(n = n(), n_pos = sum(x > 0 & y > 0), .groups = "drop") %>%
   mutate(label = paste0("n = ", n, "\nboth > 0: ", n_pos))
 
-ggplot(plot_df, aes(log10(x + 1), log10(y + 1))) +
+# vertical axis = row (left) pipeline, horizontal axis = column (bottom) pipeline
+ggplot(plot_df, aes(log10(y + 1), log10(x + 1))) +
   geom_abline(intercept = 0, slope = 1, linetype = "dashed", colour = "grey50") +
   geom_point(alpha = 0.6) +
   # geom_smooth(method = "lm") +
@@ -90,8 +91,8 @@ ggplot(plot_df, aes(log10(x + 1), log10(y + 1))) +
             inherit.aes = FALSE) +
   facet_grid(xvar ~ yvar, switch = "both") +
   coord_fixed() +
-  labs(x = "log10(Bd load + 1)  [extraction method – qPCR lab]",
-       y = "log10(Bd load + 1)  [extraction method – qPCR lab]") +
+  labs(x = "log10(Bd load + 1), pipeline named at bottom",
+       y = "log10(Bd load + 1), pipeline named at left") +
   theme_bw() +
   theme(strip.placement = "outside",
         strip.background = element_blank(),

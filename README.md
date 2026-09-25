@@ -60,6 +60,7 @@ Notes:
 - Both labs quantify against ITS1 plasmid standards, but from different standard sources.
 - **`bd_load` (ITS1 copies per swab) is the modeled quantity.** It is corrected for dilution, which differed between the two labs; raw per-reaction quantities (`bd_start_quant`) are not directly comparable.
 - No technical (well) replicates are available in the experiment data.
+- **Frog 79 is excluded** (in `R/data_prep.R`): the same extract (Pe_Bd00995) was negative at RZ but ≈ 7.8 × 10⁷ copies at SNARL; lab notes suggest contamination while loading the SNARL qPCR plate, or an extract mix-up in shipping. Its swabs are still excluded from the database replicates. Model results in this README from before this exclusion (all values up to and including the Model 2b estimates and conversion rule) include frog 79 and should be updated after refitting.
 - Many results are zero. A zero means "not detected", which may reflect noise or low detection sensitivity, not necessarily true absence. Non-detects have `bd_start_quant = NA` and `bd_load = 0`.
 
 ### Replicate data

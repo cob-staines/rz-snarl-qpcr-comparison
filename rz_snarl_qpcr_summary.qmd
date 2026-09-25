@@ -102,7 +102,7 @@ We ask three questions:
 
 # The experiment
 
-`r n_frogs` frogs (`r n_frogs_rz` collected by RZ in Pennsylvania, `r n_frogs_snarl` collected by SNARL in the Sierra Nevada) were each swabbed twice (swab A and swab B). The swabs were then split between the labs so that each frog yields three results:
+`r n_frogs` frogs (`r n_frogs_rz` collected by RZ in Pennsylvania, `r n_frogs_snarl` collected by SNARL in the Sierra Nevada; after one exclusion, see below) were each swabbed twice (swab A and swab B). The swabs were then split between the labs so that each frog yields three results:
 
 | Result | Swab | Extracted by | qPCR by |
 |---|---|---|---|
@@ -115,7 +115,7 @@ This design lets us separate the two steps:
 - **Results 1 vs 2** use the *same DNA extract* in both labs' qPCR, so any difference is due to **qPCR**.
 - **Results 2 vs 3** use the *same qPCR lab* on extracts made by the two labs, so any difference is due to **extraction** (plus natural swab-to-swab variation, since these are different swabs).
 
-In total there are `r n_results` results. **`r round(100 * share_zero)`% are zero** (Bd not detected). This is common for Bd, and it matters: a zero may mean the frog is uninfected, or that the load was too low for the pipeline to detect.
+One frog was excluded: on the same extract, RZ detected nothing but SNARL measured about 10⁸ copies. Lab notes flag this as likely contamination or a sample mix-up. In total there are `r n_results` results. **`r round(100 * share_zero)`% are zero** (Bd not detected). This is common for Bd, and it matters: a zero may mean the frog is uninfected, or that the load was too low for the pipeline to detect.
 
 We also used earlier **replicate** samples from the RIBBiTR database (the same swab run twice, or two swabs from the same frog) to learn how much results vary *within* a lab.
 
@@ -172,7 +172,6 @@ ggplot(plot_df, aes(log10(y + 1), log10(x + 1))) +
 - **A and B (same extract, different qPCR lab):** positive results sit close to the line, so the two qPCR labs agree well on quantities. Several low-load extracts were detected by RZ but not SNARL (left edge of A).
 - **C, D and E (Qiagen on the left, PrepMan at the bottom):** many frogs sit on the left edge, detected with Qiagen but not PrepMan, and positive results sit on or above the line. These panels scatter more, partly because they compare different swabs.
 - **Across panels:** disagreements about detection happen mostly at low loads (below about 10³ copies).
-- The isolated point on the bottom edge of panel A (SNARL ≈ 10⁸ copies, RZ zero, on the *same* extract) is flagged in the lab notes as likely contamination or a mix-up in shipping.
 
 # How we analysed it
 

@@ -41,6 +41,15 @@ stopifnot(!anyNA(snarl_clean$extraction_lab),
           !anyNA(snarl_clean$collect_lab),
           !anyNA(snarl_clean$qpcr_lab))
 
+# all experiment swabs, including excluded frogs, so none leak into the database replicates
+experiment_swab_ids = unique(snarl_clean$bd_swab_id)
+
+# exclude frog 79: same extract negative at RZ but ~7.8e7 copies at SNARL; lab notes suggest
+# contamination of the extract while loading the SNARL qPCR plate, or an extract mix-up in shipping
+excluded_frogs = c("79")
+snarl_clean = snarl_clean %>%
+  filter(!frog_id %in% excluded_frogs)
+
 snarl_wide = snarl_clean %>%
   pivot_wider(id_cols = c("frog_id", "collect_lab"),
               names_from = c("extraction_method", "qpcr_lab"),
@@ -48,7 +57,7 @@ snarl_wide = snarl_clean %>%
 
 # database results, excluding experiment swabs so they are not double-counted as replicates
 db_clean = bd_results %>%
-  filter(!sample_name_bd %in% snarl_clean$bd_swab_id) %>%
+  filter(!sample_name_bd %in% experiment_swab_ids) %>%
   rename(bd_swab_id = sample_name_bd,
          bd_quant_cycle = bd_cycle_quant,
          bd_start_quant = bd_target_quant,
