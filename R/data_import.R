@@ -26,9 +26,9 @@ db_site = tbl(dbcon, Id("survey_data", "site"))
 bd_results = db_bd %>%
   inner_join(db_sample, by = "sample_id") %>%
   inner_join(db_capture, by = "capture_id") %>%
-  left_join(db_survey %>% select(survey_id, visit_id), by = "survey_id") %>%
-  left_join(db_visit %>% select(visit_id, date, site_id, project_id), by = "visit_id") %>%
-  left_join(db_site %>% select(site_id, site), by = "site_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
   filter(ipc_pass | is.na(ipc_pass),
          standard_target_type == "ITS1",
          !is.na(bd_its1_copies_per_swab),
