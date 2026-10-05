@@ -134,6 +134,7 @@ rep_plot_df = replicate_pairs %>%
                                   default = qpcr_lab),
          replicate_type = recode_values(replicate_type,
                                         "qpcr" ~ "qPCR replicates",
+                                        "extraction" ~ "Extraction replicates",
                                         "swab" ~ "Swab replicates",
                                         default = replicate_type))
 

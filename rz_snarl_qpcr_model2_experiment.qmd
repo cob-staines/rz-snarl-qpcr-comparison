@@ -108,6 +108,8 @@ Informative priors only where Model 1 is well identified and the parameter means
 - **Swab SD** in `L`: Model 1 swab replicate noise minus qPCR noise, $\sqrt{\sigma_\text{swab}^2 - \sigma_\text{qPCR}^2}$.
 - **Frog-level `hu` SD**: Model 1 group-level `hu` SD.
 
+Model 1's extraction replicate noise is not used directly: Model 2 has no separate extraction noise term (swab and extraction noise share the swab-level intercept). It enters only through the shared Model 1 fit (detection, group-level SDs).
+
 Detection and load intercepts get weakly informative priors (they depend on each dataset's load distribution). The `L`–`hu` correlation gets `lkj(2)`: brms only supports LKJ priors on correlations, so Model 1's correlation (≈ −0.55) cannot be used as a centred prior.
 ```{r m2-priors-from-m1}
 #| code-fold: true
