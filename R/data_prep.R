@@ -2,8 +2,7 @@
 # Loads raw data saved by R/data_import.R (no database connection needed), and builds:
 #   snarl_clean, snarl_wide         experiment data, long & wide by frog
 #   db_clean                        database ITS1 results (experiment swabs excluded)
-#   qpcr_replicates_clean, extraction_replicates_clean, swab_replicates_clean,
-#   replicates_clean, replicates_wide
+#   same_swab_replicates_clean, swab_replicates_clean, replicates_clean, replicates_wide
 # Sourced by the diagnostics and model qmd files
 
 librarian::shelf(tidyverse, here, janitor)
@@ -78,29 +77,20 @@ db_clean = bd_results %>%
          src = "db",
          species_capture = str_to_sentence(gsub("_", " ", taxon_capture)))
 
-# qPCR replicates: same extract (swab + extraction plate) run more than once within a qPCR lab
-qpcr_replicates_clean = db_clean %>%
-  group_by(bd_swab_id, extraction_plate_name, qpcr_lab) %>%
+# same-swab replicates: the same swab measured more than once within one extraction & qPCR lab.
+# Records cannot reliably separate qPCR re-runs of a stored extract from re-extractions (extraction
+# dates mostly missing; SNARL extraction plate names copy the qPCR plate), so the two are pooled.
+same_swab_replicates_clean = db_clean %>%
+  group_by(bd_swab_id, extraction_lab, extraction_method, qpcr_lab) %>%
   filter(n() > 1) %>%
-  mutate(replicate_type = "qpcr",
-         replicate_group = paste(bd_swab_id, extraction_plate_name, qpcr_lab, sep = "_"),
+  mutate(replicate_type = "same_swab",
+         replicate_group = paste(bd_swab_id, extraction_lab, qpcr_lab, sep = "_"),
          replicate_id = row_number()) %>%
   ungroup()
 
-# extraction replicates: same swab extracted more than once (different extraction plates), within one
-# extraction & qPCR lab; results that are qPCR replicates are dropped so the two types do not overlap
-extraction_replicates_clean = db_clean %>%
-  group_by(bd_swab_id, extraction_lab, extraction_method, qpcr_lab) %>%
-  filter(n() > 1) %>%
-  mutate(replicate_type = "extraction",
-         replicate_group = paste(bd_swab_id, extraction_lab, qpcr_lab, sep = "_"),
-         replicate_id = row_number()) %>%
-  ungroup() %>%
-  anti_join(qpcr_replicates_clean, by = "result_id")
-
 # swab replicates: multiple swabs from the same capture, through the same extraction & qPCR lab
 swab_replicates_clean = db_clean %>%
-  # keep one result per swab (first qPCR plate), so qPCR re-runs are not counted as swab replicates
+  # keep one result per swab (first qPCR plate), so same-swab re-measurements are not counted as swab replicates
   arrange(qpcr_plate_name) %>%
   group_by(bd_swab_id, extraction_lab, extraction_method, qpcr_lab) %>%
   slice_head(n = 1) %>%
@@ -111,8 +101,7 @@ swab_replicates_clean = db_clean %>%
          replicate_id = row_number()) %>%
   ungroup()
 
-replicates_clean = bind_rows(qpcr_replicates_clean,
-                             extraction_replicates_clean,
+replicates_clean = bind_rows(same_swab_replicates_clean,
                              swab_replicates_clean) %>%
   select(all_of(colnames(snarl_clean)),
          qpcr_plate_name,

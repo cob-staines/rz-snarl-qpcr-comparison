@@ -1,6 +1,6 @@
 ---
-title: "Comparing Bd qPCR results between the RZ and SNARL labs"
-subtitle: "Summary of goals, data, and findings"
+title: "RIBBiTR Bd qPCR results comparison"
+subtitle: "RZ Lab vs. SNARL"
 author: "Cob Staines"
 date: today
 format:
@@ -74,65 +74,123 @@ n_results = sum(!is.na(snarl_clean$bd_load))
 share_zero = mean(snarl_clean$bd_load == 0, na.rm = TRUE)
 ```
 
-# Summary
+# Summary of Findings
 
-- **Question:** Can Bd loads measured by the RZ lab and the SNARL lab be compared directly? If not, how do we convert between them?
-- **Answer for positive samples:** SNARL loads (PrepMan extraction + SNARL qPCR) are about **`r sprintf("%.1f", 10^median(correction$prepman_snarl))`× lower** than RZ loads (Qiagen extraction + RZ qPCR). To convert, **add `r fmt_med(correction$prepman_snarl)` to log10 SNARL loads**.
+- **Question:** Are Bd detections and loads measured by the RZ lab and the SNARL lab comparable? If not, how can we make them more comparable?
+- **The hypothesis** (SNARL qPCR more often fails to detect Bd at low loads) is **moderately supported** (`r round(100 * p_snarl_more_zeros)`% probability).
+- **Zeros:** the SNARL pipeline **misses more low-load infections**. A SNARL zero is weaker evidence that a frog is uninfected than an RZ zero, and zeros cannot be deterministically converted to probable loads.
+- **Positive loads** SNARL loads (PrepMan extraction + SNARL qPCR) are about **`r sprintf("%.1f", 10^median(correction$prepman_snarl))`× lower** than RZ loads (Qiagen extraction + RZ qPCR). **Add `r fmt_med(correction$prepman_snarl)` to log10 SNARL loads to convert**.
 - **Where the difference comes from:** almost entirely the **extraction step** (PrepMan vs Qiagen). The two labs' **qPCR steps agree** on positive samples.
-- **Zeros:** the SNARL pipeline **misses more low-load infections**. A SNARL zero is weaker evidence that a frog is uninfected than an RZ zero, and zeros cannot be "converted".
-- **The group's hypothesis** (SNARL qPCR more often fails to detect Bd at low loads) is **moderately supported**: it is probably true (`r round(100 * p_snarl_more_zeros)`% probability), but the data cannot rule out no difference. On positive samples, SNARL qPCR measures the same amounts as RZ.
 
-# Hypothesis
+# Introduction
 
 Both labs measure Bd infection load by swabbing frogs, extracting DNA from the swab, and quantifying Bd DNA by qPCR. The two labs use different protocols:
 
 | Step | RZ lab | SNARL lab |
 |---|---|---|
 | DNA extraction | Qiagen DNeasy | PrepMan |
-| qPCR | RZ protocol and plasmid standard | SNARL protocol and plasmid standard |
-| Reported quantity | ITS1 copies per swab (dilution-corrected) | ITS1 copies per swab (dilution-corrected) |
+| qPCR | RZ protocol and Pisces plasmid standard | SNARL protocol and Briggs plasmid standard |
 
-We want to know whether loads from the two labs are on the same scale, and if not, how to convert between them. Going in, the group's working **hypothesis** is that **SNARL's qPCR more often fails to detect Bd at low quantities** than the RZ qPCR protocol.
+We want to know whether loads from the two labs are on the same scale, and if not, how to convert between them. The group's working **hypothesis** is that **SNARL's qPCR more often fails to detect Bd at low quantities** than the RZ qPCR protocol.
 
 We ask three questions:
 
-1. Is one lab's measurement noisier than the other's?
+1. Does **precision** ("noise" e.g. between replicates) differ between the two labs?
 2. Does the **qPCR step** give different quantities at the two labs?
 3. Does the **extraction step** give different quantities at the two labs?
 
 # Experimental Design
 
-`r n_frogs` frogs (`r n_frogs_rz` collected by RZ in Pennsylvania, `r n_frogs_snarl` collected by SNARL in the Sierra Nevada; after one exclusion, see below) were each swabbed twice (swab A and swab B). The swabs were then split between the labs so that each frog yields three results:
+`r n_frogs` frogs (`r n_frogs_rz` collected by RZ in Pennsylvania, `r n_frogs_snarl` collected by SNARL in the Sierra Nevada; after one exclusion, see below) were each swabbed in duplicate (swab A and swab B). The swabs were then split between the labs so that each frog yields three results:
 
 | Result | Swab | Extracted by | qPCR by |
 |---|---|---|---|
 | 1 | A | collecting lab | collecting lab |
-| 2 | A (same DNA extract as result 1) | collecting lab | other lab |
+| 2 | A (same extract as result 1) | collecting lab | other lab |
 | 3 | B | other lab | other lab |
 
 This design lets us separate the two steps:
 
-- **Results 1 vs 2** use the *same DNA extract* in both labs' qPCR, so any difference is due to **qPCR**.
-- **Results 2 vs 3** use the *same qPCR lab* on extracts made by the two labs, so any difference is due to **extraction** (plus natural swab-to-swab variation, since these are different swabs).
+- **Results 1 vs 2** use the *same DNA extract*, so any difference is due to the **qPCR** step.
+- **Results 2 vs 3** use the *same qPCR lab* on extracts made by the two labs, so any difference is due to the **extraction** step (plus natural swab-to-swab variation, as these are different swabs).
 
-One frog was excluded: on the same extract, RZ detected nothing but SNARL measured about 10⁸ copies. Lab notes flag this as likely contamination or a sample mix-up. In total there are `r n_results` results. **`r round(100 * share_zero)`% are zero** (Bd not detected): a zero may mean the frog is uninfected, or that the load was too low for the pipeline to detect.
+In total there are `r n_results` results. **`r round(100 * share_zero)`% are zero** (Bd not detected): a zero may mean the frog is uninfected, or that the load was too low for the pipeline to detect.
+
+One frog was excluded: on the same extract, RZ detected nothing but SNARL measured about 10⁸ copies. Lab notes flag this as likely contamination or a sample mix-up.
 
 We also used earlier **replicate** samples from the RIBBiTR database (the same swab run twice, or two swabs from the same frog) to learn how much results vary *within* a lab.
 
 ::: {.callout-note collapse="true" title="Technical details: data"}
 - Experiment data: `qpcr_compare_data_260904.xlsx`. Database replicates: ITS1 results from both labs, passing (or lacking) the internal positive control, excluding the experiment's own swabs.
 - Loads are ITS1 copies per swab, corrected for each lab's dilution; the two labs use different ITS1 plasmid standards.
-- Replicates: swab replicates exist only for RZ (Qiagen–RZ); qPCR replicates are few. Replicate definitions and diagnostics are in `rz_snarl_qpcr_diagnostics.qmd`.
+- Replicates: swab replicates exist only for RZ (Qiagen–RZ). Same-swab replicates (the same swab measured more than once) exist for only `r n_distinct(same_swab_replicates_clean$replicate_group)` swabs. Database records cannot reliably tell whether these were qPCR re-runs of a stored extract or re-extractions (extraction dates are mostly missing, and SNARL extraction plate names copy the qPCR plate name), so they are treated as one type. Replicate definitions and diagnostics are in `rz_snarl_qpcr_diagnostics.qmd`.
 - Because of the crossed design, some pairwise comparisons involve only one population (e.g. PrepMan–RZ vs Qiagen–RZ is SNARL-collected frogs only), so population and lab effects can be confounded when comparing raw panels. The model compares labs *within* frogs to avoid this.
 :::
 
 # Examining the data
 
+## Replicate data
+
+Each point is a pair of results from the RIBBiTR database, measured within one lab: the same swab measured twice (same-swab replicates; either a qPCR re-run of the stored extract or a re-extraction, we could not distinguish in our records), or two swabs from the same frog capture (swab replicates).
+
+```{r replicates}
+#| fig-width: 7
+#| fig-height: 5
+
+# all within-group replicate pairs (i < j)
+replicate_long = replicates_clean %>%
+  select(replicate_type, replicate_group, qpcr_lab, replicate_id, bd_load)
+
+rep_plot_df = replicate_long %>%
+  inner_join(replicate_long,
+             by = c("replicate_type", "replicate_group", "qpcr_lab"),
+             suffix = c("_x", "_y"),
+             relationship = "many-to-many") %>%
+  filter(replicate_id_x < replicate_id_y) %>%
+  transmute(qpcr_lab = recode_values(qpcr_lab,
+                                     "rz" ~ "RZ (Qiagen–RZ)",
+                                     "snarl" ~ "SNARL (PrepMan–SNARL)",
+                                     default = qpcr_lab),
+            replicate_type = factor(recode_values(replicate_type,
+                                                  "same_swab" ~ "Same-swab replicates",
+                                                  "swab" ~ "Swab replicates",
+                                                  default = replicate_type),
+                                    levels = c("Same-swab replicates", "Swab replicates")),
+            x = bd_load_x,
+            y = bd_load_y)
+
+rep_stats_df = rep_plot_df %>%
+  group_by(qpcr_lab, replicate_type) %>%
+  summarise(n = n(), n_pos = sum(x > 0 & y > 0), .groups = "drop") %>%
+  mutate(label = paste0("pairs: ", n, "\nboth > 0: ", n_pos))
+
+ggplot(rep_plot_df, aes(log10(x + 1), log10(y + 1))) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", colour = "grey50") +
+  geom_point(alpha = 0.6) +
+  geom_text(data = rep_stats_df, aes(x = Inf, y = -Inf, label = label),
+            hjust = 1.05, vjust = -0.3, size = 2.75, lineheight = 0.9,
+            inherit.aes = FALSE) +
+  facet_grid(qpcr_lab ~ replicate_type, drop = FALSE) +
+  coord_fixed() +
+  labs(x = "log10(Bd load + 1) of replicate 1",
+       y = "log10(Bd load + 1) of replicate 2") +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold"),
+        panel.grid.minor = element_blank())
+```
+
+- **Replicates are sparse, mostly from RZ.** SNARL has no swab replicates and only a handful of same-swab replicates. As a result SNARL-specific noise cannot be estimated independently (see Noise results below).
+- **Most RZ same-swab pairs are both zero or disagree on detection**, so these say more about detection than about quantity.
+- **The few SNARL replicates are all high-load and agree closely.** They cannot show whether SNARL is noisy at low loads, where the detection differences between the labs appear.
+
+## Experiment data
+
 Each panel compares two pipelines (extraction method – qPCR lab) on the same frogs.
 
 ```{r scatter}
 #| fig-width: 6
-#| fig-height: 6
+#| fig-height: 7
 
 pairs = tribble(
   ~letter, ~xvar,          ~yvar,
@@ -142,10 +200,14 @@ pairs = tribble(
   "D",     "qiagen_snarl", "prepman_snarl",
   "E",     "qiagen_rz",    "prepman_snarl")
 
+collect_labs = c(rz = "Pennsylvania", snarl = "Sierra Nevada")
+
 plot_df = pmap_dfr(pairs, function(letter, xvar, yvar) {
   xv = snarl_wide[[xvar]]
   yv = snarl_wide[[yvar]]
-  tibble(letter = letter, xvar = xvar, yvar = yvar, x = xv, y = yv)
+  tibble(letter = letter, xvar = xvar, yvar = yvar,
+         collect_lab = factor(collect_labs[snarl_wide$collect_lab], levels = collect_labs),
+         x = xv, y = yv)
 }) %>%
   filter(!is.na(x), !is.na(y)) %>%
   mutate(xvar = factor(nice[xvar], levels = nice[1:3]),
@@ -154,41 +216,45 @@ plot_df = pmap_dfr(pairs, function(letter, xvar, yvar) {
 # vertical axis = row (left) pipeline, horizontal axis = column (bottom) pipeline
 ggplot(plot_df, aes(log10(y + 1), log10(x + 1))) +
   geom_abline(intercept = 0, slope = 1, linetype = "dashed", colour = "grey50") +
-  geom_point(alpha = 0.6) +
+  geom_point(aes(colour = collect_lab), alpha = 0.6) +
   geom_text(data = distinct(plot_df, letter, xvar, yvar),
             aes(x = -Inf, y = Inf, label = letter),
             hjust = -0.6, vjust = 1.4, fontface = "bold", size = 5, inherit.aes = FALSE) +
   facet_grid(xvar ~ yvar, switch = "both") +
   coord_fixed() +
-  labs(x = "log10(Bd load + 1), pipeline named at bottom",
-       y = "log10(Bd load + 1), pipeline named at left") +
+  scale_colour_manual(values = setNames(c("#0072B2", "#D55E00"), collect_labs)) +
+  labs(x = "log10(Bd load + 1)",
+       y = "log10(Bd load + 1)",
+       colour = "Collected in") +
   theme_bw() +
   theme(strip.placement = "outside",
         strip.background = element_blank(),
         strip.text = element_text(face = "bold"),
-        panel.grid.minor = element_blank())
+        panel.grid.minor = element_blank(),
+        legend.position = "bottom")
 ```
 
-- **A and B (same extract, different qPCR lab):** positive results sit close to the line, so the two qPCR labs agree well on quantities. Several low-load extracts were detected by RZ but not SNARL (left edge of A).
-- **C, D and E (Qiagen on the left, PrepMan at the bottom):** many frogs sit on the left edge, detected with Qiagen but not PrepMan, and positive results sit on or above the line. These panels scatter more, partly because they compare different swabs.
+- **A and B (same swab, same extract, different qPCR lab):** positive results sit close to the 1-to-1 line, so the two qPCR labs agree well on quantities. Several low-load extracts were detected by RZ but not SNARL (left edge of A).
+- **C and D (different swab, different extraction method, same qPCR lab):** many frogs sit on the left edge, detected with Qiagen but not PrepMan, and positive results sit on or above the 1-to-1 line. Additional scatter may result from distinct swabs.
+- **E (different swab, different extraction method, different qPCR lab):** again we see low loads detected with Qiagen and not with PrepMan, with higher loads generally slightly above the 1-to-1 line. Additional scatter may result from distinct swabs.
 - **Across panels:** disagreements about detection happen mostly at low loads (below about 10³ copies).
 
 # Analysis
 
-The raw plots are a good first look, but they cannot cleanly separate lab differences from natural variation, and they treat zeros as true zeros. We used two statistical models (Bayesian, fit with `brms`):
+We used two Bayesian models (R, `brms`) to tease out the effects of different steps in the Bd qPCR pipeline on quantitative results:
 
-1. **A replicate model** learned how variable results are between swabs and between qPCR runs *within* a lab, and how the chance of detecting Bd rises with load.
-2. **An experiment model** estimated each frog's true load from all its results, then how each pipeline shifts that load up or down. Zeros are treated as "not detected" rather than "no Bd", with detection becoming more likely at higher loads. Results from the replicate model were used as starting information (priors).
+1. **Replicate model:** using the replicate dataset, estimate how variable results are between swabs and between repeat measurements of the same swab *within* a lab, and how the chance of detecting Bd rises with load.
+2. **Experiment model:** using the experimental dataset, estimate each frog's true load from all its results, then how each pipeline shifts that load up or down. Zeros are treated as "not detected" rather than "no Bd", with detection becoming more likely at higher loads. Results from the replicate model (1) were used as starting information (priors) in the experiment model (2).
 
-Because each frog is measured by both labs, the lab comparisons are made **within frogs**. Differences between frog populations (Sierra frogs carry much higher loads) therefore do not bias the lab comparison.
+Because each frog is measured by both labs, the lab comparisons are made **within frogs**. Differences between frog populations (e.g. Rana muscosa generally carry much higher loads) do not impact the lab comparison.
 
-::: {.callout-note collapse="true" title="Technical details: models"}
-**Model 1 (replicates)**, `rz_snarl_qpcr_model1_replicates.qmd`: hurdle-lognormal model with correlated group-level intercepts in `mu` and `hu` per replicate group, `hu` by qPCR lab, `sigma` by replicate type (swab vs qPCR). Load and detection are strongly linked: correlation `r fmt_ci(m1_draws$cor_replicate_group__Intercept__hu_Intercept)`. A qPCR run effect and a load-dependent `sigma` were dropped because the sparse replicates could not identify them.
+::: {.callout-note collapse="true" title="Model formulas"}
+**Model 1 (replicates)**, `rz_snarl_qpcr_model1_replicates.qmd`: hurdle-lognormal model with correlated group-level intercepts in `mu` and `hu` per replicate group, `hu` by qPCR lab, `sigma` by replicate type (swab replicates: swab + extraction + qPCR noise; same-swab replicates: qPCR noise, plus extraction noise where re-extracted). Load and detection are strongly linked: correlation `r fmt_ci(m1_draws$cor_replicate_group__Intercept__hu_Intercept)`. A qPCR run effect and a load-dependent `sigma` were dropped because the sparse replicates could not identify them.
 
-**Model 2b (experiment, final)**, `rz_snarl_qpcr_model2_experiment.qmd`: non-linear hurdle-lognormal model,
-`mu = L + d`, where `L` is the latent swab load (frog-level intercept, plus a swab-level intercept for swab + extraction noise, shared by results 1 and 2) and `d` holds constant biases for PrepMan extraction and SNARL qPCR. Detection (`hu`) has extraction and qPCR effects plus a frog-level intercept correlated with the frog's load. The residual (qPCR) noise is pooled across labs. Priors on the noise terms and detection SD come from Model 1.
+**Model 2b (experiment, no slope)**, `rz_snarl_qpcr_model2_experiment.qmd`: non-linear hurdle-lognormal model,
+`mu = L + d`, where `L` is the latent swab load (frog-level intercept, plus a swab-level intercept for swab + extraction noise, shared by results 1 and 2) and `d` holds constant biases for PrepMan extraction and SNARL qPCR. Detection (`hu`) has extraction and qPCR effects plus a frog-level intercept correlated with the frog's load. The residual (qPCR) noise is pooled across labs and learned from the experiment's shared extracts (weakly informative prior). Priors on the swab SD and detection SD come from Model 1.
 
-**Model 2 (with slope)** adds a term letting the SNARL–RZ qPCR difference change with load, `s·(L − L_ref)`: a test of whether SNARL qPCR under-quantifies low *positive* loads (a quantity bias, separate from the detection hypothesis, which is tested by the SNARL qPCR effect on `hu`). The slope was `r fmt_ci(s_slope)`. Leave-one-out cross-validation found no difference between the models (`elpd_diff` = `r sprintf("%.1f", loo_tab[2, "elpd_diff"])`, SE `r sprintf("%.1f", loo_tab[2, "se_diff"])`), so the simpler constant-bias Model 2b is used. Caveat: many results had high Pareto k (expected with 2–3 results per frog), so the LOO estimate is approximate. The slope posterior supports the same conclusion.
+**Model 2 (experiment, with slope)** adds a term letting the SNARL–RZ qPCR difference change with load, `s·(L − L_ref)`: a test of whether SNARL qPCR under-quantifies low *positive* loads (a quantity bias, separate from the detection hypothesis, which is tested by the SNARL qPCR effect on `hu`). The slope was `r fmt_ci(s_slope)`. Leave-one-out cross-validation found no difference between the models (`elpd_diff` = `r sprintf("%.1f", loo_tab[2, "elpd_diff"])`, SE `r sprintf("%.1f", loo_tab[2, "se_diff"])`), so the simpler constant-bias Model 2b is used. Caveat: many results had high Pareto k (expected with 2–3 results per frog), so the LOO estimate is approximate. The slope posterior supports the same conclusion.
 
 **Simplifications, and why:** lab-specific qPCR noise and method-specific extraction noise were each tried, but the design only identifies their *combined* values, so both were pooled. An extraction × qPCR interaction and population (collecting lab) effects were left out to focus on the lab differences.
 :::
@@ -270,7 +336,7 @@ detection_export$curves %>%
   theme(legend.position = "bottom")
 ```
 
-Loads at which each pipeline detects Bd half (50%) and most (90%) of the time:
+log10 loads at which each pipeline detects Bd 50% and 90% of the time:
 
 ```{r thresholds}
 detection_export$thresholds %>%
@@ -296,26 +362,27 @@ Detection curves come from the frog-level correlation between load and detection
 
 ## Noise
 
-Grey: estimates from the replicate data, which the experiment model used as starting information. Black: the experiment model's estimates, after adding the experiment data.
+How much a single result varies if the measurement is repeated: re-running qPCR on the same DNA extract, or taking a new swab from the same frog (which adds swab-to-swab and extraction variation on top of qPCR noise). Grey: estimate from the replicate data, which the experiment model used as starting information. Black: the experiment model's estimates, after adding the experiment data. qPCR noise comes from the experiment only: the replicate records cannot reliably separate qPCR re-runs from re-extractions.
 
 ```{r noise}
 #| fig-width: 7
 #| fig-height: 3
 
-# Model 1 (replicates) estimates that informed the Model 2b priors (log10 SD)
-m1_sigma_qpcr = exp(m1_draws$b_sigma_noise_typeqpcr) / log(10)
-m1_sd_swab = sqrt(pmax(exp(2 * m1_draws$b_sigma_noise_typeswab) -
-                         exp(2 * m1_draws$b_sigma_noise_typeqpcr), 0)) / log(10)
+# Model 1 (replicates): total noise between swabs from the same capture (log10 SD)
+m1_sigma_swab = exp(m1_draws$b_sigma_noise_typeswab) / log(10)
 
-noise_levels = c("qPCR run to run", "swab to swab (swab + extraction)")
+# Model 2b (experiment): total single-result noise = swab + extraction (swab-level SD) and qPCR (residual)
+sigma_total = sqrt(sd_swab^2 + sigma_qpcr^2)
+
+noise_levels = c("qPCR (same extract)",
+                 "swab + extraction + qPCR (same frog)")
 model_levels = c("Model 1 (replicates)", "Model 2b (experiment)")
 
 tribble(
   ~source,          ~model,          ~draws,
-  noise_levels[1],  model_levels[1], m1_sigma_qpcr,
   noise_levels[1],  model_levels[2], sigma_qpcr,
-  noise_levels[2],  model_levels[1], m1_sd_swab,
-  noise_levels[2],  model_levels[2], sd_swab) %>%
+  noise_levels[2],  model_levels[1], m1_sigma_swab,
+  noise_levels[2],  model_levels[2], sigma_total) %>%
   mutate(med = map_dbl(draws, median),
          lo50 = map_dbl(draws, quantile, 0.25), hi50 = map_dbl(draws, quantile, 0.75),
          lo95 = map_dbl(draws, quantile, 0.025), hi95 = map_dbl(draws, quantile, 0.975),
@@ -334,13 +401,13 @@ tribble(
   theme(legend.position = "bottom")
 ```
 
-A single result varies by about **`r fmt_med(sigma_qpcr)` log10 between qPCR runs** and about **`r fmt_med(sd_swab)` log10 between swabs** (swab + extraction). Swab-to-swab variation is the larger source, so a single swab is an imperfect snapshot of a frog's load.
+Re-running qPCR on the same extract moves a result by about **`r fmt_med(sigma_qpcr)` log10**; a new swab from the same frog moves it by about **`r fmt_med(sigma_total)` log10** in total. Most of that comes from swab-to-swab (and extraction) variation, so a single swab is an imperfect snapshot of a frog's load. The experiment cannot separate extraction noise from swab-to-swab noise, and the replicate records cannot reliably tell re-extractions from qPCR re-runs, so extraction noise is not reported on its own.
 
 We **cannot say whether one lab is noisier** than the other (Key question 1). The experiment only measures the labs' *combined* noise, and replicate data from SNARL were too sparse.
 
 # Converting between labs
 
-For a **positive** Bd load (ITS1 copies per swab), add the correction to the log10 load, or multiply copies by the multiplier, to put it on the RZ (Qiagen extraction, RZ qPCR) scale:
+For a **positive** Bd load (ITS1 copies per swab), add the correction to the log10 load, or multiply copies by the multiplier, to put it on the **RZ (Qiagen extraction, RZ qPCR) scale**:
 
 ```{r correction}
 correction %>%
@@ -357,7 +424,9 @@ correction %>%
   kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
 ```
 
-**For standard SNARL data (PrepMan + SNARL qPCR): log10(RZ-equivalent load) = log10(SNARL load) + `r fmt_med(correction$prepman_snarl)`.**
+**For standard SNARL data (PrepMan + SNARL qPCR):**
+
+log10(RZ-equivalent load) = log10(SNARL load) + `r fmt_med(correction$prepman_snarl)`.
 
 When to be careful:
 

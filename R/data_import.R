@@ -36,6 +36,7 @@ bd_results = db_bd %>%
   select(result_id,
          sample_id,
          capture_id,
+         any_of(colnames(db_bd)),
          sample_name_bd,
          bd_cycle_quant,
          bd_target_quant,

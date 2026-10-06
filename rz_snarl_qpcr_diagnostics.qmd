@@ -133,8 +133,7 @@ rep_plot_df = replicate_pairs %>%
                                   "snarl" ~ "SNARL qPCR",
                                   default = qpcr_lab),
          replicate_type = recode_values(replicate_type,
-                                        "qpcr" ~ "qPCR replicates",
-                                        "extraction" ~ "Extraction replicates",
+                                        "same_swab" ~ "Same-swab replicates",
                                         "swab" ~ "Swab replicates",
                                         default = replicate_type))
 
@@ -166,7 +165,7 @@ Swab replicates appear more variable than the different-swab experiment comparis
 
 ### Pair agreement
 
-Share of pairs by detection outcome, and SD of the log10 difference among pairs where both are positive. Replicates are split by whether the pair was run on the same qPCR plate (for qPCR replicates, same plate = technical well replicates).
+Share of pairs by detection outcome, and SD of the log10 difference among pairs where both are positive. Replicates are split by whether the pair was run on the same qPCR plate (for same-swab replicates, same plate = technical well replicates of one extract).
 
 ```{r diag-pairs}
 #| code-fold: true
@@ -191,7 +190,7 @@ experiment_agreement = plot_df %>%
 replicate_agreement = replicate_pairs %>%
   mutate(dataset = paste0(replicate_type, " replicates: ", pipeline, ", ",
                           if_else(same_qpcr_plate, "same qPCR plate", "different qPCR plates")),
-         shared_extract = replicate_type == "qpcr") %>%
+         shared_extract = NA) %>%  # same-swab replicates may or may not share an extract
   group_by(dataset, shared_extract) %>%
   summarise_pairs()
 
