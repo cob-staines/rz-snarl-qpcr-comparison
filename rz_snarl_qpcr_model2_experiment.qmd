@@ -55,7 +55,7 @@ m1_summary %>%
 ## Model 2: Experiment
 Between-lab extraction and qPCR differences from the crossed experiment, as a brms non-linear hurdle-lognormal model (cmdstanr backend). All quantities are on the natural-log scale of Bd load (ITS1 copies per swab) unless noted; results are converted to log10 for reporting.
 
-For positive results, the expected log load is
+Two variants are fit: **Model 2b** (with slope, below) and **Model 2a** (constant bias, `s = 0`; see Model comparison). For positive results in Model 2b, the expected log load is
 
 $$\mu = L + d + s \cdot \text{SNARL qPCR} \cdot (L - L_\text{ref})$$
 
@@ -135,13 +135,13 @@ tibble(prior = c("sd swab (L)", "sd frog (hu)"),
 ```
 
 ### Model structure
-```{r m2-structure}
+```{r m2b-structure}
 #| code-fold: true
 #| code-summary: "Show Model structure code"
 
 m2_family = hurdle_lognormal()
 
-m2_formula = bf(
+m2b_formula = bf(
   bd_load ~ L + d + s * is_snarl_qpcr * (L - L_ref),
 
   L ~ 1 +
@@ -160,7 +160,7 @@ m2_formula = bf(
   nl = TRUE
 )
 
-m2_priors = c(
+m2b_priors = c(
   # L (ln copies per swab)
   prior(normal(7, 4), class = "b", nlpar = "L", coef = "Intercept"),
   prior(normal(0, 3), class = "sd", nlpar = "L", group = "frog_id"),
@@ -189,16 +189,16 @@ m2_priors = c(
 
 ### Fit
 Fit is saved to `fits/` in the data directory and reloaded unless `refit = TRUE`.
-```{r m2-fit}
+```{r m2b-fit}
 #| code-fold: true
 #| code-summary: "Show Fit code"
 #| results: hide
 
-m2 = brm(
-  formula = m2_formula,
+m2b = brm(
+  formula = m2b_formula,
   data = m2_df,
   family = m2_family,
-  prior = m2_priors,
+  prior = m2b_priors,
   control = list(adapt_delta = 0.99),
   chains = 4,
   iter = 4000,
@@ -206,31 +206,31 @@ m2 = brm(
   seed = 1234,
   cores = 4,
   backend = "cmdstanr",
-  file = here(fit_dir, "m2_experiment"),
+  file = here(fit_dir, "m2b_experiment_slope"),
   file_refit = if (refit) "always" else "on_change"
 )
 ```
 
 ### Convergence & summary
-```{r m2-summary}
+```{r m2b-summary}
 #| code-fold: true
 #| code-summary: "Show Summary code"
 
-summary(m2)
+summary(m2b)
 ```
 
 ### Divergences
 Pairs plot of noise, bias, and slope parameters, with divergent transitions highlighted (red), to locate any remaining sampling problems.
-```{r m2-divergences}
+```{r m2b-divergences}
 #| code-fold: true
 #| code-summary: "Show Divergences code"
 #| fig-width: 9
 #| fig-height: 9
 
-m2_np = nuts_params(m2)
-cat("Divergent transitions:", sum(m2_np$Value[m2_np$Parameter == "divergent__"]), "\n")
+m2b_np = nuts_params(m2b)
+cat("Divergent transitions:", sum(m2b_np$Value[m2b_np$Parameter == "divergent__"]), "\n")
 
-mcmc_pairs(as.array(m2), np = m2_np,
+mcmc_pairs(as.array(m2b), np = m2b_np,
            pars = c("b_sigma_Intercept",
                     "sd_bd_swab_id__L_Intercept",
                     "sd_frog_id__L_Intercept",
@@ -248,14 +248,14 @@ Key effects, converted to log10 where on the load scale (posterior median, 95% i
 - `hu_*`: detection differences (logit scale of P(zero); `> 0` = more zeros).
 - `sigma`: residual qPCR noise SD, pooled across labs (log10).
 - `sd_swab`: swab + extraction noise SD, pooled across extraction methods (log10).
-```{r m2-effects}
+```{r m2b-effects}
 #| code-fold: true
 #| code-summary: "Show Lab differences code"
 
-m2_draws = as_draws_df(m2) %>%
+m2b_draws = as_draws_df(m2b) %>%
   as_tibble()
 
-m2_effects = m2_draws %>%
+m2b_effects = m2b_draws %>%
   transmute(d_prepman = b_d_is_prepman / log(10),
             d_snarl = b_d_is_snarl_qpcr / log(10),
             s = b_s_Intercept,
@@ -265,7 +265,7 @@ m2_effects = m2_draws %>%
             sd_swab = sd_bd_swab_id__L_Intercept / log(10),
             cor_L_hu = cor_frog_id__hu_Intercept__L_Intercept)
 
-m2_effects %>%
+m2b_effects %>%
   pivot_longer(everything(), names_to = "effect") %>%
   group_by(effect) %>%
   summarise(median = median(value),
@@ -279,7 +279,7 @@ m2_effects %>%
 
 ### SNARL vs RZ qPCR
 Expected difference (SNARL − RZ, log10) in the reading of the same extract, across latent load: `d_snarl + s·(L − L_ref)`. A flat line at 0 means the labs agree; a line rising with load means SNARL underestimates low loads. Right: detection probability by pipeline at the average frog.
-```{r m2-snarl-rz}
+```{r m2b-snarl-rz}
 #| code-fold: true
 #| code-summary: "Show SNARL vs RZ code"
 #| fig-width: 9
@@ -287,7 +287,7 @@ Expected difference (SNARL − RZ, log10) in the reading of the same extract, ac
 
 load_grid = seq(1, 7, by = 0.1)  # log10
 
-qpcr_diff = expand_grid(m2_draws %>% select(.draw, b_d_is_snarl_qpcr, b_s_Intercept),
+qpcr_diff = expand_grid(m2b_draws %>% select(.draw, b_d_is_snarl_qpcr, b_s_Intercept),
                         log10_load = load_grid) %>%
   mutate(diff_log10 = (b_d_is_snarl_qpcr + b_s_Intercept * (log10_load * log(10) - L_ref)) / log(10)) %>%
   group_by(log10_load) %>%
@@ -305,7 +305,7 @@ p_mu = ggplot(qpcr_diff, aes(log10_load, med)) +
   theme_bw()
 
 # detection probability at the average frog, by pipeline
-detect_df = m2_draws %>%
+detect_df = m2b_draws %>%
   transmute(.draw,
             qiagen_rz = 1 - plogis(b_hu_Intercept),
             qiagen_snarl = 1 - plogis(b_hu_Intercept + b_hu_qpcr_labsnarl),
@@ -329,31 +329,31 @@ p_mu + p_hu
 
 ### Posterior predictive checks
 Share of results detected, and median positive log10 load, by pipeline (extraction method × qPCR lab).
-```{r m2-ppc}
+```{r m2b-ppc}
 #| code-fold: true
 #| code-summary: "Show PPC code"
 #| fig-width: 8
 #| fig-height: 4
 
-m2_yrep = posterior_predict(m2, ndraws = 500)
+m2b_yrep = posterior_predict(m2b, ndraws = 500)
 
-ppc_stat_grouped(y = m2_df$bd_load, yrep = m2_yrep, group = m2_df$pipeline,
+ppc_stat_grouped(y = m2_df$bd_load, yrep = m2b_yrep, group = m2_df$pipeline,
                  stat = function(y) mean(y > 0)) +
   labs(x = "share detected")
 
-ppc_stat_grouped(y = m2_df$bd_load, yrep = m2_yrep, group = m2_df$pipeline,
+ppc_stat_grouped(y = m2_df$bd_load, yrep = m2b_yrep, group = m2_df$pipeline,
                  stat = function(y) median(log10(y[y > 0]))) +
   labs(x = "median log10(Bd load) among positives")
 ```
 
 ### Model comparison: slope vs constant bias
-Model 2b is Model 2 without the SNARL qPCR slope `s` (constant biases only: $\mu = L + d$), otherwise identical (same data, priors, and settings). The models are compared by approximate leave-one-out cross-validation (PSIS-LOO). If the difference in expected log predictive density (`elpd_diff`) is small relative to its SE (roughly < 2 SE), the simpler constant-bias model is preferred.
-```{r m2b-fit}
+Model 2a is Model 2b without the SNARL qPCR slope `s` (constant biases only: $\mu = L + d$), otherwise identical (same data, priors, and settings). The models are compared by approximate leave-one-out cross-validation (PSIS-LOO). If the difference in expected log predictive density (`elpd_diff`) is small relative to its SE (roughly < 2 SE), the simpler constant-bias model is preferred.
+```{r m2a-fit}
 #| code-fold: true
-#| code-summary: "Show Model 2b fit code"
+#| code-summary: "Show Model 2a fit code"
 #| results: hide
 
-m2b_formula = bf(
+m2a_formula = bf(
   bd_load ~ L + d,
 
   L ~ 1 +
@@ -371,13 +371,13 @@ m2b_formula = bf(
 )
 
 # same priors, minus the slope
-m2b_priors = m2_priors[m2_priors$nlpar != "s", ]
+m2a_priors = m2b_priors[m2b_priors$nlpar != "s", ]
 
-m2b = brm(
-  formula = m2b_formula,
+m2a = brm(
+  formula = m2a_formula,
   data = m2_df,
   family = m2_family,
-  prior = m2b_priors,
+  prior = m2a_priors,
   control = list(adapt_delta = 0.99),
   chains = 4,
   iter = 4000,
@@ -385,45 +385,45 @@ m2b = brm(
   seed = 1234,
   cores = 4,
   backend = "cmdstanr",
-  file = here(fit_dir, "m2b_experiment_constant"),
+  file = here(fit_dir, "m2a_experiment_constant"),
   file_refit = if (refit) "always" else "on_change"
 )
 
 # loo is stored in the saved fit files, so it is only computed once
-m2 = add_criterion(m2, "loo")
 m2b = add_criterion(m2b, "loo")
+m2a = add_criterion(m2a, "loo")
 ```
 
 ```{r m2-compare}
 #| code-fold: true
 #| code-summary: "Show Model comparison code"
 
-summary(m2b)
+summary(m2a)
 
 # Pareto k diagnostics: values > 0.7 mean the LOO estimate for that result is unreliable
-tibble(model = c("m2 (slope)", "m2b (constant)"),
-       n_k_over_0.7 = c(sum(loo(m2)$diagnostics$pareto_k > 0.7),
-                        sum(loo(m2b)$diagnostics$pareto_k > 0.7))) %>%
+tibble(model = c("m2b (slope)", "m2a (constant)"),
+       n_k_over_0.7 = c(sum(loo(m2b)$diagnostics$pareto_k > 0.7),
+                        sum(loo(m2a)$diagnostics$pareto_k > 0.7))) %>%
   kable() %>%
   kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
 
-loo_compare(m2, m2b) %>%
+loo_compare(m2b, m2a) %>%
   as.data.frame() %>%
   rownames_to_column("model") %>%
   select(model, elpd_diff, se_diff, elpd_loo, p_loo) %>%
   kable(digits = 2) %>%
   kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
 
-# constant correction to the Qiagen-RZ scale under Model 2b (log10 and multiplier)
-m2b_draws = as_draws_df(m2b) %>%
+# constant correction to the Qiagen-RZ scale under Model 2a (log10 and multiplier)
+m2a_draws = as_draws_df(m2a) %>%
   as_tibble()
 
-m2b_correction = m2b_draws %>%
+m2a_correction = m2a_draws %>%
   transmute(prepman_snarl = -(b_d_is_prepman + b_d_is_snarl_qpcr) / log(10),
             prepman_rz = -b_d_is_prepman / log(10),
             qiagen_snarl = -b_d_is_snarl_qpcr / log(10))
 
-m2b_correction %>%
+m2a_correction %>%
   pivot_longer(everything(), names_to = "pipeline", values_to = "correction_log10") %>%
   group_by(pipeline) %>%
   summarise(median = median(correction_log10),
@@ -433,19 +433,19 @@ m2b_correction %>%
             multiplier_lo95 = 10^lo95,
             multiplier_hi95 = 10^hi95,
             .groups = "drop") %>%
-  kable(digits = 2, caption = "Model 2b: constant correction to Qiagen–RZ scale (add to log10 load, or multiply copies)") %>%
+  kable(digits = 2, caption = "Model 2a: constant correction to Qiagen–RZ scale (add to log10 load, or multiply copies)") %>%
   kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
 
 # export constant correction draws (log10) for applying elsewhere
-saveRDS(list(draws = m2b_correction,
+saveRDS(list(draws = m2a_correction,
              reference_pipeline = "qiagen_rz",
              scale = "log10 correction to add to positive log10 loads",
              import_date = import_date,
              export_date = Sys.Date()),
-        here(fit_dir, "m2b_constant_correction_export.rds"))
+        here(fit_dir, "m2a_constant_correction_export.rds"))
 ```
 
-### Detection conversion (Model 2b)
+### Detection conversion (Model 2a)
 Probability of detecting Bd by pipeline, as a function of a frog's true load on the reference (Qiagen–RZ) scale. Derived from the frog-level `L`–`hu` correlation: for a frog with true load $\ell$ (ln),
 
 $$\text{hu} \mid \ell \sim N\left(h_0 + h_\text{pipeline} + \rho \frac{\sigma_{hu}}{\sigma_L}(\ell - L_0),\; \sigma_{hu}^2(1 - \rho^2)\right)$$
@@ -453,14 +453,14 @@ $$\text{hu} \mid \ell \sim N\left(h_0 + h_\text{pipeline} + \rho \frac{\sigma_{h
 averaged over the conditional spread (probit approximation to the logistic-normal), $P(\text{detected}) = 1 - E[\text{logit}^{-1}(\text{hu})]$.
 
 Caveats: pipelines share the detection-vs-load slope and differ only in baseline (correlation approach); the curve reflects frog-level load (swab-to-swab variation not included); population differences are absorbed by the frog-level effects, so the load–detection relationship mixes within- and between-population variation; curves are extrapolated below the range of observed positive loads.
-```{r m2b-detection}
+```{r m2a-detection}
 #| code-fold: true
 #| code-summary: "Show Detection conversion code"
 #| fig-width: 7
 #| fig-height: 4.5
 
 # thin to 2000 draws to keep the grid manageable
-m2b_det_draws = m2b_draws %>%
+m2a_det_draws = m2a_draws %>%
   slice(round(seq(1, n(), length.out = 2000))) %>%
   transmute(.draw,
             L_0 = b_L_Intercept,
@@ -478,7 +478,7 @@ det_pipelines = tribble(
   "prepman_rz",     1,        0,
   "prepman_snarl",  1,        1)
 
-detection_draws = expand_grid(m2b_det_draws,
+detection_draws = expand_grid(m2a_det_draws,
                               det_pipelines,
                               log10_load = seq(0, 9, by = 0.05)) %>%
   mutate(hu_mean = hu_0 + hu_prepman * prepman + hu_snarl * snarl_qpcr +
@@ -513,7 +513,7 @@ detection_curves %>%
 ```
 
 Detection thresholds: true load (log10, Qiagen–RZ scale) at which each pipeline reaches 50% and 90% detection (posterior median and 95% interval).
-```{r m2b-detection-thresholds}
+```{r m2a-detection-thresholds}
 #| code-fold: true
 #| code-summary: "Show Detection thresholds code"
 
@@ -537,7 +537,7 @@ detection_thresholds %>%
 ```
 
 Detection probability at selected true loads for the two labs' standard pipelines, and the difference (RZ − SNARL; posterior median and 95% interval).
-```{r m2b-detection-table}
+```{r m2a-detection-table}
 #| code-fold: true
 #| code-summary: "Show Detection table code"
 
@@ -562,23 +562,23 @@ saveRDS(list(curves = detection_curves,
              load_scale = "true log10 load, Qiagen-RZ scale (frog level)",
              import_date = import_date,
              export_date = Sys.Date()),
-        here(fit_dir, "m2b_detection_export.rds"))
+        here(fit_dir, "m2a_detection_export.rds"))
 ```
 
-### Correction to a common scale (Model 2, with slope)
+### Correction to a common scale (Model 2b, with slope)
 Conversion of a positive reading from any pipeline to the reference pipeline (Qiagen extraction, RZ qPCR). For a reading $y$ (ln scale) from a pipeline with extraction bias $d_\text{ext}$ (PrepMan only), qPCR bias $d_\text{q}$ and slope $s$ (SNARL qPCR only):
 
 $$y = L + d_\text{ext} + d_\text{q} + s(L - L_\text{ref}) \quad\Rightarrow\quad L = \frac{y - d_\text{ext} - d_\text{q} + s L_\text{ref}}{1 + s}$$
 
 where $L$ is the reference-pipeline (Qiagen + RZ) equivalent. The plot and table show the correction $L - y$ (log10) across observed loads (posterior median, 90% interval). Corrections apply to positive results only: zeros cannot be corrected, and pipelines differ in detection (see detection plot above).
-```{r m2-correction}
+```{r m2b-correction}
 #| code-fold: true
 #| code-summary: "Show Correction code"
 #| fig-width: 7
 #| fig-height: 4
 
 # posterior draws of correction parameters (ln scale)
-m2_correction_draws = m2_draws %>%
+m2b_correction_draws = m2b_draws %>%
   transmute(.draw,
             d_prepman = b_d_is_prepman,
             d_snarl = b_d_is_snarl_qpcr,
@@ -590,7 +590,7 @@ pipelines = tribble(
   "prepman_rz",     1,        0,
   "qiagen_snarl",   0,        1)
 
-correction = expand_grid(m2_correction_draws,
+correction = expand_grid(m2b_correction_draws,
                          pipelines,
                          log10_obs = seq(1, 7, by = 0.1)) %>%
   mutate(y = log10_obs * log(10),
@@ -623,10 +623,10 @@ correction %>%
   kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
 
 # export correction parameter draws (ln scale) and L_ref for applying the correction elsewhere
-saveRDS(list(draws = m2_correction_draws,
+saveRDS(list(draws = m2b_correction_draws,
              L_ref = L_ref,
              reference_pipeline = "qiagen_rz",
              import_date = import_date,
              export_date = Sys.Date()),
-        here(fit_dir, "m2_correction_export.rds"))
+        here(fit_dir, "m2b_slope_correction_export.rds"))
 ```

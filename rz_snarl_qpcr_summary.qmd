@@ -25,10 +25,10 @@ source(here("R", "data_prep.R"))
 # saved model fits and exports (produced by the Model 1 and Model 2 qmd files; nothing is refit here)
 fit_dir = here(wddir, "fits")
 m1_export = readRDS(here(fit_dir, "m1_replicates_export.rds"))
-m2 = readRDS(here(fit_dir, "m2_experiment.rds"))
-m2b = readRDS(here(fit_dir, "m2b_experiment_constant.rds"))
-correction_export = readRDS(here(fit_dir, "m2b_constant_correction_export.rds"))
-detection_export = readRDS(here(fit_dir, "m2b_detection_export.rds"))
+m2b = readRDS(here(fit_dir, "m2b_experiment_slope.rds"))
+m2a = readRDS(here(fit_dir, "m2a_experiment_constant.rds"))
+correction_export = readRDS(here(fit_dir, "m2a_constant_correction_export.rds"))
+detection_export = readRDS(here(fit_dir, "m2a_detection_export.rds"))
 
 # "median (95% CI lo to hi)"
 fmt_ci = function(x, digits = 2) {
@@ -42,17 +42,17 @@ nice = c(qiagen_rz = "Qiagen–RZ", qiagen_snarl = "Qiagen–SNARL",
 
 # key posterior quantities (log10 scale where on the load scale)
 m1_draws = m1_export$draws
-m2_draws = as_draws_df(m2) %>% as_tibble()
 m2b_draws = as_draws_df(m2b) %>% as_tibble()
+m2a_draws = as_draws_df(m2a) %>% as_tibble()
 
-d_prepman = m2b_draws$b_d_is_prepman / log(10)
-d_snarl = m2b_draws$b_d_is_snarl_qpcr / log(10)
-hu_prepman = m2b_draws$b_hu_extraction_methodprepman
-hu_snarl = m2b_draws$b_hu_qpcr_labsnarl
-sigma_qpcr = exp(m2b_draws$b_sigma_Intercept) / log(10)
-sd_swab = m2b_draws$sd_bd_swab_id__L_Intercept / log(10)
-cor_load_hu = m2b_draws$cor_frog_id__hu_Intercept__L_Intercept
-s_slope = m2_draws$b_s_Intercept
+d_prepman = m2a_draws$b_d_is_prepman / log(10)
+d_snarl = m2a_draws$b_d_is_snarl_qpcr / log(10)
+hu_prepman = m2a_draws$b_hu_extraction_methodprepman
+hu_snarl = m2a_draws$b_hu_qpcr_labsnarl
+sigma_qpcr = exp(m2a_draws$b_sigma_Intercept) / log(10)
+sd_swab = m2a_draws$sd_bd_swab_id__L_Intercept / log(10)
+cor_load_hu = m2a_draws$cor_frog_id__hu_Intercept__L_Intercept
+s_slope = m2b_draws$b_s_Intercept
 
 # hypothesis: SNARL qPCR more often fails to detect Bd at low loads
 p_snarl_more_zeros = mean(hu_snarl > 0)
@@ -64,7 +64,7 @@ qpcr_threshold_diff = detection_export$thresholds %>%
   pull(diff)
 
 correction = correction_export$draws
-loo_tab = loo_compare(m2, m2b)
+loo_tab = loo_compare(m2b, m2a)
 
 # data counts
 n_frogs = n_distinct(snarl_clean$frog_id)
@@ -251,10 +251,10 @@ Because each frog is measured by both labs, the lab comparisons are made **withi
 ::: {.callout-note collapse="true" title="Model formulas"}
 **Model 1 (replicates)**, `rz_snarl_qpcr_model1_replicates.qmd`: hurdle-lognormal model with correlated group-level intercepts in `mu` and `hu` per replicate group, `hu` by qPCR lab, `sigma` by replicate type (swab replicates: swab + extraction + qPCR noise; same-swab replicates: qPCR noise, plus extraction noise where re-extracted). Load and detection are strongly linked: correlation `r fmt_ci(m1_draws$cor_replicate_group__Intercept__hu_Intercept)`. A qPCR run effect and a load-dependent `sigma` were dropped because the sparse replicates could not identify them.
 
-**Model 2b (experiment, no slope)**, `rz_snarl_qpcr_model2_experiment.qmd`: non-linear hurdle-lognormal model,
+**Model 2a (experiment, no slope)**, `rz_snarl_qpcr_model2_experiment.qmd`: non-linear hurdle-lognormal model,
 `mu = L + d`, where `L` is the latent swab load (frog-level intercept, plus a swab-level intercept for swab + extraction noise, shared by results 1 and 2) and `d` holds constant biases for PrepMan extraction and SNARL qPCR. Detection (`hu`) has extraction and qPCR effects plus a frog-level intercept correlated with the frog's load. The residual (qPCR) noise is pooled across labs and learned from the experiment's shared extracts (weakly informative prior). Priors on the swab SD and detection SD come from Model 1.
 
-**Model 2 (experiment, with slope)** adds a term letting the SNARL–RZ qPCR difference change with load, `s·(L − L_ref)`: a test of whether SNARL qPCR under-quantifies low *positive* loads (a quantity bias, separate from the detection hypothesis, which is tested by the SNARL qPCR effect on `hu`). The slope was `r fmt_ci(s_slope)`. Leave-one-out cross-validation found no difference between the models (`elpd_diff` = `r sprintf("%.1f", loo_tab[2, "elpd_diff"])`, SE `r sprintf("%.1f", loo_tab[2, "se_diff"])`), so the simpler constant-bias Model 2b is used. Caveat: many results had high Pareto k (expected with 2–3 results per frog), so the LOO estimate is approximate. The slope posterior supports the same conclusion.
+**Model 2b (experiment, with slope)** adds a term letting the SNARL–RZ qPCR difference change with load, `s·(L − L_ref)`: a test of whether SNARL qPCR under-quantifies low *positive* loads (a quantity bias, separate from the detection hypothesis, which is tested by the SNARL qPCR effect on `hu`). The slope was `r fmt_ci(s_slope)`. Leave-one-out cross-validation found no difference between the models (`elpd_diff` = `r sprintf("%.1f", loo_tab[2, "elpd_diff"])`, SE `r sprintf("%.1f", loo_tab[2, "se_diff"])`), so the simpler constant-bias Model 2a is used. Caveat: many results had high Pareto k (expected with 2–3 results per frog), so the LOO estimate is approximate. The slope posterior supports the same conclusion.
 
 **Simplifications, and why:** lab-specific qPCR noise and method-specific extraction noise were each tried, but the design only identifies their *combined* values, so both were pooled. An extraction × qPCR interaction and population (collecting lab) effects were left out to focus on the lab differences.
 :::
@@ -304,10 +304,10 @@ Both steps of the SNARL pipeline lean toward more non-detects: SNARL qPCR (the h
 #| fig-width: 7
 #| fig-height: 5
 
-# each result at its frog's estimated true load (Model 2b, posterior median, log10, RZ scale)
-frog_load = coef(m2b, robust = TRUE)$frog_id[, "Estimate", "L_Intercept"] / log(10)
+# each result at its frog's estimated true load (Model 2a, posterior median, log10, RZ scale)
+frog_load = coef(m2a, robust = TRUE)$frog_id[, "Estimate", "L_Intercept"] / log(10)
 
-detection_obs = m2b$data %>%
+detection_obs = m2a$data %>%
   as_tibble() %>%
   mutate(pipeline = paste(if_else(is_prepman == 1, "prepman", "qiagen"),
                           if_else(is_snarl_qpcr == 1, "snarl", "rz"), sep = "_"),
@@ -357,7 +357,7 @@ detection_export$thresholds %>%
 ```
 
 ::: {.callout-note collapse="true" title="Technical details: detection"}
-Detection curves come from the frog-level correlation between load and detection in Model 2b (correlation `r fmt_ci(cor_load_hu)`), averaged over remaining frog-to-frog variation. All pipelines share the same slope and differ only in baseline: PrepMan `hu` effect `r fmt_ci(hu_prepman)`, SNARL qPCR `hu` effect `r fmt_ci(hu_snarl)` (logit scale of P(zero); positive = more zeros). Curves are extrapolated below the range of observed positive loads, and describe frog-level load (swab-to-swab variation not included). Each tick is placed at its frog's posterior median load; for frogs with no positive results, this estimate rests largely on the model (the frog-level spread and the load–detection correlation) rather than on measured loads.
+Detection curves come from the frog-level correlation between load and detection in Model 2a (correlation `r fmt_ci(cor_load_hu)`), averaged over remaining frog-to-frog variation. All pipelines share the same slope and differ only in baseline: PrepMan `hu` effect `r fmt_ci(hu_prepman)`, SNARL qPCR `hu` effect `r fmt_ci(hu_snarl)` (logit scale of P(zero); positive = more zeros). Curves are extrapolated below the range of observed positive loads, and describe frog-level load (swab-to-swab variation not included). Each tick is placed at its frog's posterior median load; for frogs with no positive results, this estimate rests largely on the model (the frog-level spread and the load–detection correlation) rather than on measured loads.
 :::
 
 ## Noise
@@ -371,12 +371,12 @@ How much a single result varies if the measurement is repeated: re-running qPCR 
 # Model 1 (replicates): total noise between swabs from the same capture (log10 SD)
 m1_sigma_swab = exp(m1_draws$b_sigma_noise_typeswab) / log(10)
 
-# Model 2b (experiment): total single-result noise = swab + extraction (swab-level SD) and qPCR (residual)
+# Model 2a (experiment): total single-result noise = swab + extraction (swab-level SD) and qPCR (residual)
 sigma_total = sqrt(sd_swab^2 + sigma_qpcr^2)
 
 noise_levels = c("qPCR (same extract)",
                  "swab + extraction + qPCR (same frog)")
-model_levels = c("Model 1 (replicates)", "Model 2b (experiment)")
+model_levels = c("Model 1 (replicates)", "Model 2a (experiment)")
 
 tribble(
   ~source,          ~model,          ~draws,
@@ -392,7 +392,7 @@ tribble(
   geom_linerange(aes(xmin = lo95, xmax = hi95), position = position_dodge(width = 0.5)) +
   geom_linerange(aes(xmin = lo50, xmax = hi50), linewidth = 1.5, position = position_dodge(width = 0.5)) +
   geom_point(size = 2.5, position = position_dodge(width = 0.5)) +
-  scale_colour_manual(values = c("Model 1 (replicates)" = "grey60", "Model 2b (experiment)" = "black"),
+  scale_colour_manual(values = c("Model 1 (replicates)" = "grey60", "Model 2a (experiment)" = "black"),
                       breaks = model_levels) +
   expand_limits(x = 0) +
   labs(x = "noise SD (log10 Bd load)", y = NULL, colour = NULL,
@@ -435,7 +435,7 @@ When to be careful:
 - **It is specific to these protocols and standards.** If either lab changes its extraction kit, qPCR protocol, or plasmid standard, the conversion needs re-checking.
 
 ::: {.callout-note collapse="true" title="Technical details: conversion"}
-The correction for a pipeline is minus the sum of its bias terms in Model 2b (PrepMan extraction and/or SNARL qPCR), converted to log10. Posterior draws are exported to `fits/m2b_constant_correction_export.rds`, so uncertainty can be propagated into downstream analyses. A load-dependent version of the correction, from Model 2 (with slope), is shown in the Model 2 report. It was not preferred, because the slope was indistinguishable from zero.
+The correction for a pipeline is minus the sum of its bias terms in Model 2a (PrepMan extraction and/or SNARL qPCR), converted to log10. Posterior draws are exported to `fits/m2a_constant_correction_export.rds`, so uncertainty can be propagated into downstream analyses. A load-dependent version of the correction, from Model 2b (with slope), is shown in the Model 2 report. It was not preferred, because the slope was indistinguishable from zero.
 :::
 
 # Limitations
