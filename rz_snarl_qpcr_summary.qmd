@@ -440,6 +440,7 @@ When to be careful:
 
 # Discussion points
 
+- What are the applications of these findings?
 - Is a single conversion factor (×`r sprintf("%.1f", 10^median(correction$prepman_snarl))`) good enough for combined analyses, or should we propagate uncertainty in this factor as well?
 - Zero conversions: How should historical SNARL zeros be handled in prevalence comparisons (for example, restricting comparisons to loads above the detection thresholds)?
 - Is the extraction difference large enough to consider aligning extraction methods going forward? For what applications?
