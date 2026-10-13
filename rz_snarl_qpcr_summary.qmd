@@ -9,6 +9,7 @@ format:
     toc: true
     toc-depth: 2
     number-sections: true
+output-file: index.html
 execute:
   echo: false
   warning: false
@@ -77,8 +78,8 @@ share_zero = mean(snarl_clean$bd_load == 0, na.rm = TRUE)
 # Summary of Findings
 
 - **Question:** Are Bd detections and loads measured by the RZ lab and the SNARL lab comparable? If not, how can we make them more comparable?
-- **The hypothesis** (SNARL qPCR more often fails to detect Bd at low loads) is **moderately supported** (`r round(100 * p_snarl_more_zeros)`% probability).
-- **Zeros:** the SNARL pipeline **misses more low-load infections**. A SNARL zero is weaker evidence that a frog is uninfected than an RZ zero, and zeros cannot be deterministically converted to probable loads.
+- **Hypothesis** (SNARL qPCR more often fails to detect Bd at low loads) is **moderately supported** (`r round(100 * p_snarl_more_zeros)`% probability).
+- **Zeros (Bd negatives):** the SNARL pipeline **misses more low-load infections**. A SNARL zero is weaker evidence that a frog is uninfected than an RZ zero, and zeros cannot be deterministically converted to probable loads.
 - **Positive loads** SNARL loads (PrepMan extraction + SNARL qPCR) are about **`r sprintf("%.1f", 10^median(correction$prepman_snarl))`× lower** than RZ loads (Qiagen extraction + RZ qPCR). **Add `r fmt_med(correction$prepman_snarl)` to log10 SNARL loads to convert**.
 - **Where the difference comes from:** almost entirely the **extraction step** (PrepMan vs Qiagen). The two labs' **qPCR steps agree** on positive samples.
 
@@ -101,7 +102,7 @@ We ask three questions:
 
 # Experimental Design
 
-`r n_frogs` frogs (`r n_frogs_rz` collected by RZ in Pennsylvania, `r n_frogs_snarl` collected by SNARL in the Sierra Nevada; after one exclusion, see below) were each swabbed in duplicate (swab A and swab B). The swabs were then split between the labs so that each frog yields three results:
+`r n_frogs` frogs (`r n_frogs_rz` collected by RZ Lab in Pennsylvania, `r n_frogs_snarl` collected by SNARL in the Sierra Nevada; after one exclusion, see below) were each swabbed in duplicate (swab A and swab B). The swabs were then split between the labs so that each frog yields three results:
 
 | Result | Swab | Extracted by | qPCR by |
 |---|---|---|---|
@@ -120,14 +121,14 @@ One frog was excluded: on the same extract, RZ detected nothing but SNARL measur
 
 We also used earlier **replicate** samples from the RIBBiTR database (the same swab run twice, or two swabs from the same frog) to learn how much results vary *within* a lab.
 
-::: {.callout-note collapse="true" title="Technical details: data"}
+::: {.callout-note collapse="true" title="Data sources"}
 - Experiment data: `qpcr_compare_data_260904.xlsx`. Database replicates: ITS1 results from both labs, passing (or lacking) the internal positive control, excluding the experiment's own swabs.
 - Loads are ITS1 copies per swab, corrected for each lab's dilution; the two labs use different ITS1 plasmid standards.
 - Replicates: swab replicates exist only for RZ (Qiagen–RZ). Same-swab replicates (the same swab measured more than once) exist for only `r n_distinct(same_swab_replicates_clean$replicate_group)` swabs. Database records cannot reliably tell whether these were qPCR re-runs of a stored extract or re-extractions (extraction dates are mostly missing, and SNARL extraction plate names copy the qPCR plate name), so they are treated as one type. Replicate definitions and diagnostics are in `rz_snarl_qpcr_diagnostics.qmd`.
 - Because of the crossed design, some pairwise comparisons involve only one population (e.g. PrepMan–RZ vs Qiagen–RZ is SNARL-collected frogs only), so population and lab effects can be confounded when comparing raw panels. The model compares labs *within* frogs to avoid this.
 :::
 
-# Examining the data
+# Exploring the data
 
 ## Replicate data
 
@@ -356,10 +357,6 @@ detection_export$thresholds %>%
   kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
 ```
 
-::: {.callout-note collapse="true" title="Technical details: detection"}
-Detection curves come from the frog-level correlation between load and detection in Model 2a (correlation `r fmt_ci(cor_load_hu)`), averaged over remaining frog-to-frog variation. All pipelines share the same slope and differ only in baseline: PrepMan `hu` effect `r fmt_ci(hu_prepman)`, SNARL qPCR `hu` effect `r fmt_ci(hu_snarl)` (logit scale of P(zero); positive = more zeros). Curves are extrapolated below the range of observed positive loads, and describe frog-level load (swab-to-swab variation not included). Each tick is placed at its frog's posterior median load; for frogs with no positive results, this estimate rests largely on the model (the frog-level spread and the load–detection correlation) rather than on measured loads.
-:::
-
 ## Noise
 
 How much a single result varies if the measurement is repeated: re-running qPCR on the same DNA extract, or taking a new swab from the same frog (which adds swab-to-swab and extraction variation on top of qPCR noise). Grey: estimate from the replicate data, which the experiment model used as starting information. Black: the experiment model's estimates, after adding the experiment data. qPCR noise comes from the experiment only: the replicate records cannot reliably separate qPCR re-runs from re-extractions.
@@ -434,20 +431,16 @@ When to be careful:
 - **Use the conversion on the log scale.** It shifts typical (median) loads; converting *average* loads on the raw copies scale needs more care.
 - **It is specific to these protocols and standards.** If either lab changes its extraction kit, qPCR protocol, or plasmid standard, the conversion needs re-checking.
 
-::: {.callout-note collapse="true" title="Technical details: conversion"}
-The correction for a pipeline is minus the sum of its bias terms in Model 2a (PrepMan extraction and/or SNARL qPCR), converted to log10. Posterior draws are exported to `fits/m2a_constant_correction_export.rds`, so uncertainty can be propagated into downstream analyses. A load-dependent version of the correction, from Model 2b (with slope), is shown in the Model 2 report. It was not preferred, because the slope was indistinguishable from zero.
-:::
+# Some Limitations
 
-# Limitations
-
-- **We cannot compare the labs' noise.** The experiment identifies only combined qPCR noise and combined extraction noise, and SNARL replicates were sparse.
-- **Small sample at low loads.** Many results are zero, so conclusions about very low loads (and the detection curves there) rest on few positive results and model assumptions.
-- **Shared detection slope.** The model assumes the pipelines' detection curves have the same shape and differ only in position.
-- **One snapshot of protocols.** Results apply to the kits, protocols and standards in use during the experiment.
+- **Noise in the qPCR process is grouped among labs.** The experiment identifies only combined qPCR noise and combined extraction noise, and SNARL replicates were sparse. This could be improved upon with a stronger rep[licate dataset from each lab.
+- **Small sample at low loads.** Many results are zero, so conclusions about very low loads (and the detection curves there) rest on few positive results and model assumptions. More low-load samples shared between labs, or replicated within labs could help to reduce  model uncertainty.
+- **Shared detection slope.** The models assume the pipelines' detection curves have the same shape and differ only in position.
+- **One snapshot of protocols.** Results apply to the kits, protocols and standards in use during the experiment. Impacts beyond these protocols are not assessed.
 
 # Discussion points
 
-- Is a single conversion factor (×`r sprintf("%.1f", 10^median(correction$prepman_snarl))`) good enough for combined analyses, or should uncertainty in the factor be carried through?
-- How should historical SNARL zeros be handled in prevalence comparisons (for example, restricting comparisons to loads above the detection thresholds)?
-- Is the extraction difference large enough to consider aligning extraction methods going forward?
-- Would a small targeted follow-up (for example, duplicate swabs through the SNARL pipeline) be worthwhile to answer the noise question?
+- Is a single conversion factor (×`r sprintf("%.1f", 10^median(correction$prepman_snarl))`) good enough for combined analyses, or should we propagate uncertainty in this factor as well?
+- Zero conversions: How should historical SNARL zeros be handled in prevalence comparisons (for example, restricting comparisons to loads above the detection thresholds)?
+- Is the extraction difference large enough to consider aligning extraction methods going forward? For what applications?
+- Would a small targeted follow-up with existing replicates be worthwhile to answer the noise question?

@@ -4,6 +4,5 @@
 .Ruserdata
 *.Rproj
 # rendered quarto output
-*.html
 *_files/
-
+/.quarto/
