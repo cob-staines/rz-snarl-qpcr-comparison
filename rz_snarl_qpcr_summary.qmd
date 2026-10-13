@@ -83,7 +83,7 @@ share_zero = mean(snarl_clean$bd_load == 0, na.rm = TRUE)
 - **Positive loads** SNARL loads (PrepMan extraction + SNARL qPCR) are about **`r sprintf("%.1f", 10^median(correction$prepman_snarl))`× lower** than RZ loads (Qiagen extraction + RZ qPCR). **Add `r fmt_med(correction$prepman_snarl)` to log10 SNARL loads to convert**.
 - **Where the difference comes from:** almost entirely the **extraction step** (PrepMan vs Qiagen). The two labs' **qPCR steps agree** on positive samples.
 
-# Introduction
+# Purpose
 
 Both labs measure Bd infection load by swabbing frogs, extracting DNA from the swab, and quantifying Bd DNA by qPCR. The two labs use different protocols:
 
