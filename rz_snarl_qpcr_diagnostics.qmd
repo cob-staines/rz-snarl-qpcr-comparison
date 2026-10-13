@@ -17,11 +17,14 @@ Load packages; load and clean experiment and replicate data (`R/data_prep.R`, fr
 #| code-fold: true
 #| code-summary: "Show Setup code"
 #| results: hide
-librarian::shelf(tidyverse, here, knitr, kableExtra, ggplot2)
+librarian::shelf(tidyverse, here, knitr, kableExtra, ggplot2, patchwork)
 
 # loads experiment data (qpcr_compare_data_260904.xlsx) and RIBBiTR database replicates,
 # builds snarl_clean, snarl_wide, db_clean, *_replicates_clean, replicates_clean, replicates_wide
 source(here("R", "data_prep.R"))
+
+# loads RZ eDNA plate data (R/edna_import.R), builds edna_clean, edna_units, edna_cleaning_log, edna_excluded_plates
+source(here("R", "edna_prep.R"))
 ```
 
 ## Experiment data
@@ -362,4 +365,117 @@ ba_df %>%
   theme(panel.grid.minor = element_blank(),
         legend.position = "bottom",
         legend.direction = "vertical")
+```
+
+## eDNA technical replicates (RZ qPCR)
+
+RZ lab eDNA Bd qPCR plates (`R/edna_import.R`, `R/edna_prep.R`): each extract run in three wells on one plate (RZ qPCR, same assay and standards as the experiment). Well-to-well differences measure within-plate qPCR noise (pipetting, Poisson sampling of copies into the well, amplification), not run-to-run or lab-to-lab noise. Quantities are copies per reaction; × 40 gives the experiment's Bd load scale (ITS1 copies per swab, Qiagen extracts).
+
+### Cleaning
+
+Re-runs and re-extractions were done when contamination was suspected, so only the latest extraction of each sample, and its latest run, are kept. Plates with a positive no-template or field negative control are then dropped, as are wells whose IPC did not amplify (inhibition).
+
+```{r edna-cleaning}
+#| code-fold: true
+#| code-summary: "Show eDNA cleaning code"
+
+edna_cleaning_log %>%
+  kable(caption = "Wells and samples remaining after each step") %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+
+edna_excluded_plates %>%
+  kable(caption = "Plates dropped for a positive negative control") %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE, font_size = 12)
+
+edna_units %>%
+  mutate(sample_type = if_else(is_tissue, "tissue", "eDNA")) %>%
+  count(sample_type, n_wells, n_detected) %>%
+  pivot_wider(names_from = n_detected, values_from = n, values_fill = 0, names_prefix = "detected_") %>%
+  kable(caption = "Samples by wells run and wells detected") %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+### Noise and detection vs. load
+
+Left: SD of log10 quantity between a sample's detected wells (samples with ≥ 2 detected wells), against their mean. The dashed line is the SD expected from Poisson sampling of copies into the well alone ($0.434 / \sqrt{\text{copies}}$). Right: share of a sample's wells detected (samples with ≥ 1 detected well; this conditioning inflates detection at the lowest loads, where samples with 0/3 wells are left out). Ticks along the bottom are the experiment's positive results (copies per reaction, by qPCR lab), to show which part of the load range matters for Model 2.
+
+```{r edna-noise-detection}
+#| code-fold: true
+#| code-summary: "Show eDNA noise & detection code"
+#| fig-width: 10
+#| fig-height: 4.5
+
+edna_plot_df = edna_units %>%
+  filter(n_detected > 0) %>%
+  mutate(sample_type = if_else(is_tissue, "tissue", "eDNA"),
+         log10_copies = mean_log10_load - log10(edna_load_factor),
+         share_detected = n_detected / n_wells)
+
+experiment_positive = snarl_clean %>%
+  filter(bd_load > 0, !is.na(bd_start_quant)) %>%
+  mutate(log10_copies = log10(bd_start_quant),
+         qpcr_lab = paste(toupper(qpcr_lab), "qPCR (experiment)"))
+
+copies_axis = sec_axis(~ . + log10(edna_load_factor), name = "log10(Bd load per swab), Qiagen (× 40)")
+
+p_edna_sd = ggplot(edna_plot_df %>% filter(n_detected >= 2), aes(log10_copies, sd_log10_load)) +
+  geom_function(fun = function(x) 0.434 / sqrt(10^x), linetype = "dashed", colour = "grey50") +
+  geom_point(aes(colour = sample_type), alpha = 0.7) +
+  geom_smooth(method = "loess", se = FALSE, colour = "black", linewidth = 0.7) +
+  geom_rug(data = experiment_positive, aes(log10_copies, linetype = qpcr_lab), inherit.aes = FALSE,
+           sides = "b", alpha = 0.6) +
+  scale_x_continuous(sec.axis = copies_axis) +
+  coord_cartesian(ylim = c(0, 0.8)) +
+  labs(x = "log10(Bd copies per reaction)", y = "SD of log10 quantity between wells",
+       colour = NULL, linetype = NULL) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.direction = "vertical")
+
+p_edna_det = ggplot(edna_plot_df, aes(log10_copies, share_detected)) +
+  geom_jitter(aes(colour = sample_type), width = 0, height = 0.03, alpha = 0.6) +
+  geom_smooth(method = "loess", se = FALSE, colour = "black", linewidth = 0.7) +
+  geom_rug(data = experiment_positive, aes(log10_copies, linetype = qpcr_lab), inherit.aes = FALSE,
+           sides = "b", alpha = 0.6) +
+  scale_x_continuous(sec.axis = copies_axis) +
+  labs(x = "log10(Bd copies per reaction), mean of detected wells", y = "share of wells detected",
+       colour = NULL, linetype = NULL) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.direction = "vertical")
+
+p_edna_sd + p_edna_det
+```
+
+Binned summary: pooled within-sample SD of log10 quantity (samples with ≥ 2 detected wells), mean share of wells detected (samples with ≥ 1 detected well), and the share of the experiment's positive results in each bin.
+
+```{r edna-binned}
+#| code-fold: true
+#| code-summary: "Show binned summary code"
+
+copies_bins = c(-Inf, 0, 0.5, 1, 1.5, 2, 3, Inf)
+
+edna_binned = edna_plot_df %>%
+  mutate(bin = cut(log10_copies, copies_bins)) %>%
+  group_by(bin) %>%
+  summarise(samples_detected = n(),
+            share_wells_detected = mean(share_detected),
+            samples_sd = sum(n_detected >= 2),
+            pooled_sd_log10 = sqrt(sum(((n_detected - 1) * sd_log10_load^2)[n_detected >= 2]) /
+                                     sum((n_detected - 1)[n_detected >= 2])),
+            .groups = "drop")
+
+experiment_binned = experiment_positive %>%
+  mutate(bin = cut(log10_copies, copies_bins)) %>%
+  count(bin, qpcr_lab) %>%
+  group_by(qpcr_lab) %>%
+  mutate(share = n / sum(n)) %>%
+  ungroup() %>%
+  select(-n) %>%
+  pivot_wider(names_from = qpcr_lab, values_from = share, values_fill = 0)
+
+edna_binned %>%
+  full_join(experiment_binned, by = "bin") %>%
+  arrange(bin) %>%
+  rename(`log10 copies per reaction` = bin) %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
 ```

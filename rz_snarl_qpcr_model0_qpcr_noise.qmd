@@ -1,0 +1,357 @@
+---
+title: "rz_snarl_qpcr_model0_qpcr_noise"
+author: "Cob Staines"
+format: html
+editor: visual
+---
+
+# RZ-SNARL qPCR Comparison: Model 0 (qPCR technical noise)
+
+**Objective**: Model RZ qPCR well-to-well noise and per-well detection as a function of load, from eDNA extracts run in triplicate wells on one plate. Posterior draws and the noise and detection curves are exported for use in Model 2 (`rz_snarl_qpcr_model2_experiment.qmd`).
+
+Experiment results are single wells, so per-well noise and detection are the relevant quantities. Wells of one extract on one plate share a standard curve, so this is **within-plate** noise only (pipetting, Poisson sampling of copies into the well, amplification). It is a lower bound on the qPCR noise between the experiment's shared-extract results, which were run on different plates in different labs.
+
+## Setup
+
+Load packages; load and clean eDNA data (`R/edna_prep.R`, from data saved by `R/edna_import.R`) and experiment data (`R/data_prep.R`, for comparing load ranges)
+
+```{r setup}
+#| code-fold: true
+#| code-summary: "Show Setup code"
+#| results: hide
+librarian::shelf(tidyverse, here, knitr, kableExtra, ggplot2, patchwork, brms, cmdstanr, posterior, bayesplot)
+
+cmdstanr::check_cmdstan_toolchain()   # confirms Stan is found
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+
+source(here("R", "data_prep.R"))
+source(here("R", "edna_prep.R"))
+
+# fitted models are saved outside the repo
+fit_dir = here(wddir, "fits")
+dir.create(fit_dir, showWarnings = FALSE)
+
+# set TRUE to refit models instead of loading saved fits
+refit = FALSE
+
+# include tissue extracts (higher loads, different matrix)
+include_tissue = TRUE
+# include samples with no detected well (mostly true absence in eDNA; see Model structure)
+include_all_zero = FALSE
+```
+
+## Model 0: qPCR technical noise
+
+Per-well noise and detection as a function of load, as a brms hurdle-lognormal model (cmdstanr backend), following Model 1.
+
+- **Latent load**: each sample (one extract, on its latest run) has a group-level intercept in `mu`, its true (log) load.
+- **Detection**: `hu` (probability a well is not detected) has a group-level intercept correlated with `mu`, so the `mu`–`hu` correlation gives the per-well detection curve.
+- **Noise**: `sigma` (well-to-well SD) also has a group-level intercept correlated with `mu`, so the `mu`–`sigma` correlation gives the noise-vs-load curve. This makes log noise linear in log load, which matches Poisson sampling at low copy numbers (SD ∝ 1/√copies) but has no floor at high loads.
+- **Samples with no detected well are left out** by default (`include_all_zero = FALSE`). In eDNA most of them are true absences, not missed detections, and would pile up at the low end of the latent-load distribution. The cost is that detection at the lowest loads is overestimated (samples with low load that happened to give 0/3 wells are missing). Set `include_all_zero = TRUE` for a sensitivity check.
+
+`mu` and `sigma` are on the natural-log scale of Bd load (ITS1 copies per swab, Qiagen scale: 40 × copies per reaction); results are converted to log10 for plots, on both scales.
+
+### Model data
+
+```{r m0-data}
+#| code-fold: true
+#| code-summary: "Show Model data code"
+
+m0_df = edna_clean %>%
+  filter(include_tissue | !is_tissue) %>%
+  group_by(sample) %>%
+  filter(include_all_zero | any(detected)) %>%
+  ungroup() %>%
+  mutate(sample_type = if_else(is_tissue, "tissue", "eDNA"))
+
+m0_df %>%
+  group_by(sample_type) %>%
+  summarise(samples = n_distinct(sample),
+            plates = n_distinct(plate),
+            wells = n(),
+            detected = mean(detected),
+            samples_2plus_detected = n_distinct(sample[detected][duplicated(sample[detected])]),
+            .groups = "drop") %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+### Model structure
+
+```{r m0-structure}
+#| code-fold: true
+#| code-summary: "Show Model structure code"
+
+m0_family = hurdle_lognormal()
+
+m0_formula = bf(
+  bd_load ~ 1 +
+    (1 | g | sample),
+
+  hu ~ 1 +
+    (1 | g | sample),
+
+  sigma ~ 1 +
+    (1 | g | sample)
+)
+
+m0_priors = c(
+  # mu (ln copies per swab; eDNA positives are mostly 1-30 copies per reaction, i.e. ~40-1200 per swab)
+  prior(normal(5, 3), class = "Intercept"),
+
+  # hu
+  prior(normal(0, 2), class = "Intercept", dpar = "hu"),
+
+  # sigma (log of ln-scale SD; -1 ~ 0.16 log10)
+  prior(normal(-1, 1), class = "Intercept", dpar = "sigma"),
+
+  # group-level effects (sd priors are set per dpar; class = "sd" alone covers mu only)
+  prior(exponential(1), class = "sd"),
+  prior(exponential(1), class = "sd", dpar = "hu"),
+  prior(exponential(1), class = "sd", dpar = "sigma"),
+  prior(lkj(2), class = "cor")
+)
+```
+
+### Fit
+
+Fit is saved to `fits/` in the data directory and reloaded unless `refit = TRUE`.
+
+```{r m0-fit}
+#| code-fold: true
+#| code-summary: "Show Fit code"
+#| results: hide
+
+m0 = brm(
+  formula = m0_formula,
+  data = m0_df,
+  family = m0_family,
+  prior = m0_priors,
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 1234,
+  cores = 4,
+  backend = "cmdstanr",
+  file = here(fit_dir, "m0_qpcr_noise"),
+  file_refit = if (refit) "always" else "on_change"
+)
+```
+
+### Convergence & summary
+
+```{r m0-summary}
+#| code-fold: true
+#| code-summary: "Show Summary code"
+
+summary(m0)
+
+# group-level correlations: mu-hu (detection vs load), mu-sigma (noise vs load)
+posterior_summary(m0, variable = "^cor_sample", regex = TRUE) %>%
+  as.data.frame() %>%
+  rownames_to_column("term") %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+### Noise and detection curves
+
+Population-level curves implied by the correlated group-level intercepts: for a sample with latent log load `mu`, the conditional distribution of its `hu` and log `sigma` intercepts is normal, with mean shifted by $\rho \, sd / sd_\mu \, (\mu - \mu_0)$ and variance $sd^2 (1 - \rho^2)$. Noise is the conditional median SD; detection averages over the conditional spread (probit approximation to the logistic-normal, as in Model 1).
+
+```{r m0-curves-calc}
+#| code-fold: true
+#| code-summary: "Show curve calculation code"
+
+m0_pop = as_draws_df(m0) %>%
+  as_tibble() %>%
+  transmute(draw = .draw,
+            mu_0 = b_Intercept,
+            hu_0 = b_hu_Intercept,
+            sigma_0 = b_sigma_Intercept,
+            sd_mu = sd_sample__Intercept,
+            sd_hu = sd_sample__hu_Intercept,
+            sd_sigma = sd_sample__sigma_Intercept,
+            rho_hu = cor_sample__Intercept__hu_Intercept,
+            rho_sigma = cor_sample__Intercept__sigma_Intercept)
+
+m0_curve_draws = expand_grid(m0_pop, log10_load = seq(1, 5, by = 0.05)) %>%
+  mutate(mu = log10_load * log(10),
+         hu_mean = hu_0 + rho_hu * sd_hu / sd_mu * (mu - mu_0),
+         hu_var = sd_hu^2 * (1 - rho_hu^2),
+         p_detect = 1 - plogis(hu_mean / sqrt(1 + pi * hu_var / 8)),
+         # ln-scale SD -> SD of log10(load)
+         sigma_log10 = exp(sigma_0 + rho_sigma * sd_sigma / sd_mu * (mu - mu_0)) / log(10))
+
+m0_curves = m0_curve_draws %>%
+  pivot_longer(c(p_detect, sigma_log10), names_to = "curve") %>%
+  group_by(curve, log10_load) %>%
+  summarise(med = median(value),
+            lo = quantile(value, 0.05),
+            hi = quantile(value, 0.95),
+            .groups = "drop") %>%
+  mutate(log10_copies = log10_load - log10(edna_load_factor))
+
+# sample-level estimates
+m0_samples = m0_df %>%
+  group_by(sample, sample_type) %>%
+  summarise(n_wells = n(),
+            n_detected = sum(detected),
+            obs_sd_log10 = if_else(n_detected > 1, sd(log10(bd_load[detected])), NA_real_),
+            .groups = "drop")
+
+mu_sample = posterior_linpred(m0, newdata = m0_samples, dpar = "mu") / log(10)
+sigma_sample = posterior_linpred(m0, newdata = m0_samples, dpar = "sigma", transform = TRUE) / log(10)
+
+m0_samples = m0_samples %>%
+  mutate(log10_load = apply(mu_sample, 2, median),
+         sigma_log10 = apply(sigma_sample, 2, median),
+         share_detected = n_detected / n_wells)
+
+# load range supported by samples with detected wells (beyond it the curves extrapolate)
+m0_data_range = m0_samples %>%
+  filter(n_detected > 0) %>%
+  summarise(lo = quantile(log10_load, 0.05), hi = quantile(log10_load, 0.95)) %>%
+  unlist()
+```
+
+Left: well-to-well noise SD against latent load. Points are each sample's observed SD between detected wells (samples with ≥ 2 detected wells); the dashed line is Poisson sampling of copies alone. Right: per-well detection; points are each sample's share of wells detected, at its estimated latent load. Line and band: population-level curve (posterior median, 90% interval); shaded areas lie outside the middle 90% of sample loads (extrapolation). Ticks along the bottom are the experiment's positive results by qPCR lab, as copies per reaction × 40, so results line up by copies in the well (PrepMan results sit lower here than their swab load, since PrepMan extracts are diluted 80× rather than 40×).
+
+```{r m0-curves-plot}
+#| code-fold: true
+#| code-summary: "Show curve plot code"
+#| fig-width: 10
+#| fig-height: 4.5
+
+experiment_positive = snarl_clean %>%
+  filter(bd_load > 0, !is.na(bd_start_quant)) %>%
+  mutate(log10_load = log10(edna_load_factor * bd_start_quant),
+         qpcr_lab = paste(toupper(qpcr_lab), "qPCR (experiment)"))
+
+copies_axis = sec_axis(~ . - log10(edna_load_factor), name = "log10(Bd copies per reaction)")
+
+extrapolation = list(
+  annotate("rect", xmin = -Inf, xmax = m0_data_range[["lo"]], ymin = -Inf, ymax = Inf, alpha = 0.1),
+  annotate("rect", xmin = m0_data_range[["hi"]], xmax = Inf, ymin = -Inf, ymax = Inf, alpha = 0.1)
+)
+
+curve_layers = function(which) {
+  d = m0_curves %>% filter(curve == which)
+  list(geom_ribbon(data = d, aes(log10_load, ymin = lo, ymax = hi), fill = "grey60", alpha = 0.4, inherit.aes = FALSE),
+       geom_line(data = d, aes(log10_load, med), colour = "grey20", inherit.aes = FALSE))
+}
+
+experiment_rug = geom_rug(data = experiment_positive, aes(log10_load, linetype = qpcr_lab),
+                          inherit.aes = FALSE, sides = "b", alpha = 0.6)
+
+p_noise = ggplot(m0_samples %>% filter(n_detected >= 2), aes(log10_load, obs_sd_log10)) +
+  extrapolation +
+  geom_function(fun = function(x) 0.434 / sqrt(10^x / edna_load_factor), linetype = "dashed", colour = "grey50") +
+  curve_layers("sigma_log10") +
+  geom_point(aes(colour = sample_type), alpha = 0.6) +
+  experiment_rug +
+  scale_x_continuous(sec.axis = copies_axis) +
+  coord_cartesian(xlim = c(1, 5), ylim = c(0, 0.8)) +
+  labs(x = "latent log10(Bd load per swab), Qiagen scale", y = "well-to-well SD (log10)",
+       colour = NULL, linetype = NULL) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.direction = "vertical")
+
+p_detect = ggplot(m0_samples, aes(log10_load, share_detected)) +
+  extrapolation +
+  curve_layers("p_detect") +
+  geom_jitter(aes(colour = sample_type), width = 0, height = 0.03, alpha = 0.6) +
+  experiment_rug +
+  scale_x_continuous(sec.axis = copies_axis) +
+  coord_cartesian(xlim = c(1, 5)) +
+  labs(x = "latent log10(Bd load per swab), Qiagen scale", y = "P(well detected)",
+       colour = NULL, linetype = NULL) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.direction = "vertical")
+
+p_noise + p_detect
+```
+
+Curve values at selected loads (posterior median, 90% interval).
+
+```{r m0-curves-table}
+#| code-fold: true
+#| code-summary: "Show curve table code"
+
+m0_curves %>%
+  filter(round(log10_load, 2) %in% c(1.5, 2, 2.5, 3, 3.5, 4)) %>%
+  mutate(value = sprintf("%.2f (%.2f, %.2f)", med, lo, hi),
+         extrapolated = log10_load < m0_data_range[["lo"]] | log10_load > m0_data_range[["hi"]]) %>%
+  select(curve, log10_load, log10_copies, value, extrapolated) %>%
+  pivot_wider(names_from = curve, values_from = value) %>%
+  rename(`log10 load per swab` = log10_load,
+         `log10 copies per reaction` = log10_copies,
+         `P(detected)` = p_detect,
+         `noise SD (log10)` = sigma_log10) %>%
+  kable(digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
+
+### Posterior predictive checks
+
+Share of wells detected, median positive log10 load, and pooled within-sample SD of log10 load among detected wells (samples with ≥ 2 detected wells).
+
+```{r m0-ppc}
+#| code-fold: true
+#| code-summary: "Show PPC code"
+#| fig-width: 10
+#| fig-height: 3.5
+
+m0_yrep = posterior_predict(m0, ndraws = 500)
+
+pooled_within_sd = function(y) {
+  tibble(sample = m0_df$sample, y = y) %>%
+    filter(y > 0) %>%
+    group_by(sample) %>%
+    filter(n() >= 2) %>%
+    mutate(dev = log10(y) - mean(log10(y))) %>%
+    ungroup() %>%
+    summarise(sd = sqrt(sum(dev^2) / (n() - n_distinct(sample)))) %>%
+    pull(sd)
+}
+
+(ppc_stat(y = m0_df$bd_load, yrep = m0_yrep, stat = function(y) mean(y > 0)) +
+    labs(x = "share of wells detected")) +
+  (ppc_stat(y = m0_df$bd_load, yrep = m0_yrep, stat = function(y) median(log10(y[y > 0]))) +
+     labs(x = "median log10(Bd load), detected wells")) +
+  (ppc_stat(y = m0_df$bd_load, yrep = m0_yrep, stat = pooled_within_sd) +
+     labs(x = "pooled within-sample SD (log10)"))
+```
+
+### Export for Model 2
+
+Posterior draws and summaries of population-level effects, group-level SDs, and correlations, plus the noise and detection curves (per draw and summarised) and the load range supported by data, saved to `fits/m0_qpcr_noise_export.rds`.
+
+```{r m0-export}
+#| code-fold: true
+#| code-summary: "Show Export code"
+
+m0_draws = as_draws_df(m0) %>%
+  subset_draws(variable = c("^b_", "^sd_", "^cor_"), regex = TRUE)
+
+m0_summary = m0_draws %>%
+  summarise_draws(mean, sd, median,
+                  ~ quantile(.x, probs = c(0.025, 0.975)))
+
+m0_export = list(summary = m0_summary,
+                 draws = m0_draws,
+                 curves = m0_curves,
+                 curve_draws = m0_curve_draws %>% select(draw, log10_load, p_detect, sigma_log10),
+                 data_range_log10_load = m0_data_range,
+                 load_factor = edna_load_factor,
+                 settings = list(include_tissue = include_tissue, include_all_zero = include_all_zero),
+                 formula = m0_formula,
+                 import_date = edna_import_date,
+                 export_date = Sys.Date())
+
+saveRDS(m0_export, here(fit_dir, "m0_qpcr_noise_export.rds"))
+
+m0_summary %>%
+  kable(digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+```
