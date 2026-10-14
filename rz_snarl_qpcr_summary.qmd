@@ -23,8 +23,12 @@ librarian::shelf(tidyverse, here, knitr, kableExtra, ggplot2, brms, posterior)
 # cleaned experiment and replicate data (from data saved by R/data_import.R)
 source(here("R", "data_prep.R"))
 
-# saved model fits and exports (produced by the Model 1 and Model 2 qmd files; nothing is refit here)
+# saved model fits and exports (produced by the Model 0, 1 and 2 qmd files; nothing is refit here)
 fit_dir = here(wddir, "fits")
+m0_export = readRDS(here(fit_dir, "m0_qpcr_noise_export.rds"))
+if (!identical(m0_export$settings$latent_dist, "student")) {
+  warning("Model 0 export is not from the Student-t fit; re-render Model 0 with latent_dist = \"student\"")
+}
 m1_export = readRDS(here(fit_dir, "m1_replicates_export.rds"))
 m2b = readRDS(here(fit_dir, "m2b_experiment_slope.rds"))
 m2a = readRDS(here(fit_dir, "m2a_experiment_constant.rds"))
@@ -54,6 +58,22 @@ sigma_qpcr = exp(m2a_draws$b_sigma_Intercept) / log(10)
 sd_swab = m2a_draws$sd_bd_swab_id__L_Intercept / log(10)
 cor_load_hu = m2a_draws$cor_frog_id__hu_Intercept__L_Intercept
 s_slope = m2b_draws$b_s_Intercept
+
+# Model 0 (RZ eDNA triplicates): within-plate qPCR noise SD (log10), RMS over the experiment's positive
+# results, by copies in the well (copies per reaction x load factor, clamped to the curve grid)
+m0_sigma_at = function(x) m0_export$curves %>%
+  filter(curve == "sigma_log10", round(log10_load, 2) == x) %>%
+  pull(med)
+experiment_grid_load = snarl_clean %>%
+  filter(bd_load > 0, !is.na(bd_start_quant)) %>%
+  transmute(log10_load = round(pmin(pmax(log10(m0_export$load_factor * bd_start_quant), 1), 5) * 20) / 20) %>%
+  count(log10_load)
+sigma_qpcr_plate = m0_export$curve_draws %>%
+  mutate(log10_load = round(log10_load * 20) / 20) %>%
+  inner_join(experiment_grid_load, by = "log10_load") %>%
+  group_by(draw) %>%
+  summarise(sigma = sqrt(sum(n * sigma_log10^2) / sum(n)), .groups = "drop") %>%
+  pull(sigma)
 
 # hypothesis: SNARL qPCR more often fails to detect Bd at low loads
 p_snarl_more_zeros = mean(hu_snarl > 0)
@@ -242,14 +262,17 @@ ggplot(plot_df, aes(log10(y + 1), log10(x + 1))) +
 
 # Analysis
 
-We used two Bayesian models (R, `brms`) to tease out the effects of different steps in the Bd qPCR pipeline on quantitative results:
+We used two Bayesian models (R, `brms`) to tease out the effects of different steps in the Bd qPCR pipeline on quantitative results, plus a third for RZ qPCR noise only:
 
+0. **qPCR noise model:** using RZ eDNA extracts run in triplicate wells on one plate, estimate how much RZ qPCR wells vary, and how this depends on load. Used for comparison only (see Noise); it does not feed into the other models.
 1. **Replicate model:** using the replicate dataset, estimate how variable results are between swabs and between repeat measurements of the same swab *within* a lab, and how the chance of detecting Bd rises with load.
 2. **Experiment model:** using the experimental dataset, estimate each frog's true load from all its results, then how each pipeline shifts that load up or down. Zeros are treated as "not detected" rather than "no Bd", with detection becoming more likely at higher loads. Results from the replicate model (1) were used as starting information (priors) in the experiment model (2).
 
 Because each frog is measured by both labs, the lab comparisons are made **within frogs**. Differences between frog populations (e.g. Rana muscosa generally carry much higher loads) do not impact the lab comparison.
 
 ::: {.callout-note collapse="true" title="Model formulas"}
+**Model 0 (qPCR noise)**, `rz_snarl_qpcr_model0_qpcr_noise.qmd`: hurdle-lognormal model of eDNA triplicate wells, with correlated Student-t group-level intercepts per sample in `mu` and `hu` (detection vs. load), and `sigma` depending on the sample's observed mean log10 load (log-linear, as for Poisson sampling of copies). Within-plate RZ noise only; not used as a prior.
+
 **Model 1 (replicates)**, `rz_snarl_qpcr_model1_replicates.qmd`: hurdle-lognormal model with correlated group-level intercepts in `mu` and `hu` per replicate group, `hu` by qPCR lab, `sigma` by replicate type (swab replicates: swab + extraction + qPCR noise; same-swab replicates: qPCR noise, plus extraction noise where re-extracted). Load and detection are strongly linked: correlation `r fmt_ci(m1_draws$cor_replicate_group__Intercept__hu_Intercept)`. A qPCR run effect and a load-dependent `sigma` were dropped because the sparse replicates could not identify them.
 
 **Model 2a (experiment, no slope)**, `rz_snarl_qpcr_model2_experiment.qmd`: non-linear hurdle-lognormal model,
@@ -332,7 +355,7 @@ detection_export$curves %>%
   labs(x = "true log10(Bd load), RZ scale",
        y = "chance of detecting Bd",
        colour = NULL, fill = NULL,
-       caption = "Lines: posterior median; bands: 90% interval; ticks: results (top = detected, bottom = not detected)") +
+       caption = "Posterior median (lines) with 90% interval (bands). Ticks: top = detected, bottom = not detected") +
   theme_bw() +
   theme(legend.position = "bottom")
 ```
@@ -359,11 +382,11 @@ detection_export$thresholds %>%
 
 ## Noise
 
-How much a single result varies if the measurement is repeated: re-running qPCR on the same DNA extract, or taking a new swab from the same frog (which adds swab-to-swab and extraction variation on top of qPCR noise). Grey: estimate from the replicate data, which the experiment model used as starting information. Black: the experiment model's estimates, after adding the experiment data. qPCR noise comes from the experiment only: the replicate records cannot reliably separate qPCR re-runs from re-extractions.
+How much a single result varies if the measurement is repeated: re-running qPCR on the same DNA extract, or taking a new swab from the same frog (which adds swab-to-swab and extraction variation on top of qPCR noise). Grey: estimate from the replicate data, which the experiment model used as starting information. Black: the experiment model's estimates, after adding the experiment data. Light grey: RZ well-to-well noise within one plate (eDNA triplicates, Model 0), averaged over the loads of the experiment's positive results (by copies in the well). qPCR noise comes from the experiment only: the replicate records cannot reliably separate qPCR re-runs from re-extractions.
 
 ```{r noise}
 #| fig-width: 7
-#| fig-height: 3
+#| fig-height: 3.5
 
 # Model 1 (replicates): total noise between swabs from the same capture (log10 SD)
 m1_sigma_swab = exp(m1_draws$b_sigma_noise_typeswab) / log(10)
@@ -371,15 +394,17 @@ m1_sigma_swab = exp(m1_draws$b_sigma_noise_typeswab) / log(10)
 # Model 2a (experiment): total single-result noise = swab + extraction (swab-level SD) and qPCR (residual)
 sigma_total = sqrt(sd_swab^2 + sigma_qpcr^2)
 
-noise_levels = c("qPCR (same extract)",
+noise_levels = c("qPCR, same plate (RZ only)",
+                 "qPCR (same extract)",
                  "swab + extraction + qPCR (same frog)")
-model_levels = c("Model 1 (replicates)", "Model 2a (experiment)")
+model_levels = c("Model 0 (eDNA triplicates)", "Model 1 (replicates)", "Model 2a (experiment)")
 
 tribble(
   ~source,          ~model,          ~draws,
-  noise_levels[1],  model_levels[2], sigma_qpcr,
-  noise_levels[2],  model_levels[1], m1_sigma_swab,
-  noise_levels[2],  model_levels[2], sigma_total) %>%
+  noise_levels[1],  model_levels[1], sigma_qpcr_plate,
+  noise_levels[2],  model_levels[3], sigma_qpcr,
+  noise_levels[3],  model_levels[2], m1_sigma_swab,
+  noise_levels[3],  model_levels[3], sigma_total) %>%
   mutate(med = map_dbl(draws, median),
          lo50 = map_dbl(draws, quantile, 0.25), hi50 = map_dbl(draws, quantile, 0.75),
          lo95 = map_dbl(draws, quantile, 0.025), hi95 = map_dbl(draws, quantile, 0.975),
@@ -389,16 +414,19 @@ tribble(
   geom_linerange(aes(xmin = lo95, xmax = hi95), position = position_dodge(width = 0.5)) +
   geom_linerange(aes(xmin = lo50, xmax = hi50), linewidth = 1.5, position = position_dodge(width = 0.5)) +
   geom_point(size = 2.5, position = position_dodge(width = 0.5)) +
-  scale_colour_manual(values = c("Model 1 (replicates)" = "grey60", "Model 2a (experiment)" = "black"),
+  scale_colour_manual(values = c("Model 0 (eDNA triplicates)" = "grey80", "Model 1 (replicates)" = "grey60",
+                                 "Model 2a (experiment)" = "black"),
                       breaks = model_levels) +
   expand_limits(x = 0) +
   labs(x = "noise SD (log10 Bd load)", y = NULL, colour = NULL,
-       caption = "Points: posterior median; thick bars: 50% interval; thin bars: 95% interval") +
+       caption = "Posterior median (points) with 50% (thick) and 95% (thin) intervals") +
   theme_bw() +
   theme(legend.position = "bottom")
 ```
 
 Re-running qPCR on the same extract moves a result by about **`r fmt_med(sigma_qpcr)` log10**; a new swab from the same frog moves it by about **`r fmt_med(sigma_total)` log10** in total. Most of that comes from swab-to-swab (and extraction) variation, so a single swab is an imperfect snapshot of a frog's load. The experiment cannot separate extraction noise from swab-to-swab noise, and the replicate records cannot reliably tell re-extractions from qPCR re-runs, so extraction noise is not reported on its own.
+
+Within one plate, RZ qPCR wells of the same extract differ by about **`r fmt_med(sigma_qpcr_plate)` log10** at the experiment's loads. This is strongly load-dependent: about `r sprintf("%.2f", m0_sigma_at(2))` log10 at 2 log10 per swab (≈ 2.5 copies per reaction) but `r sprintf("%.2f", m0_sigma_at(3.5))` at 3.5 log10 (≈ 80 copies), as expected from random sampling of a few copies into each well. It is a lower bound on the experiment's qPCR noise, which also includes differences between runs and labs (separate plates and standard curves).
 
 We **cannot say whether one lab is noisier** than the other (Key question 1). The experiment only measures the labs' *combined* noise, and replicate data from SNARL were too sparse.
 
