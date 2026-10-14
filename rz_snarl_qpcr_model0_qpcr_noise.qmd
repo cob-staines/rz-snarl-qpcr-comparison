@@ -39,6 +39,10 @@ include_tissue = TRUE
 # include samples with no detected well (mostly true absence in eDNA; see Model structure)
 include_all_zero = FALSE
 
+# latent load distribution of sample intercepts: "student" (df fixed at student_df) or "normal"
+latent_dist = "student"
+student_df = 4
+
 # centre of the sigma load covariate (log10 Bd load per swab, Qiagen scale)
 load_center = 2.5
 ```
@@ -47,7 +51,7 @@ load_center = 2.5
 
 Per-well noise and detection as a function of load, as a brms hurdle-lognormal model (cmdstanr backend), following Model 1.
 
-- **Latent load**: each sample (one extract, on its latest run) has a group-level intercept in `mu`, its true (log) load. Group-level intercepts are Student-t, so the few high-load samples (tissue, some Sierra Nevada eDNA) sit at their own loads instead of being shrunk into the eDNA bulk just above the detection limit.
+- **Latent load**: each sample (one extract, on its latest run) has a group-level intercept in `mu`, its true (log) load. By default (`latent_dist = "student"`), group-level intercepts are Student-t with degrees of freedom fixed at `student_df` (4), so the few high-load samples (tissue, some Sierra Nevada eDNA) sit at their own loads instead of being shrunk into the eDNA bulk just above the detection limit. Estimating the degrees of freedom did not converge (`df` ≈ 1.9, Rhat 1.10, 28 divergences): with ~3 wells per sample the tail shape is not identified, and the near-Cauchy fit had a very narrow core (scale ≈ 0.15 log10) that pulled samples with one detected well toward the centre, so the median positive load was overpredicted. `latent_dist = "normal"` is a sensitivity check, and shows that Student-t intercepts are required: with normal intercepts, the high-load samples are again shrunk (to ≈ 2.3–2.5 log10, including the three wells at 5.3 log10) and explained by a large `sigma`, so the `sigma` slope turns positive (+0.88 per log10) and replicated within-sample SD above 3 log10 is ≈ 1.5 (90% 0.7–3.4) vs. 0.05 observed; the `sigma` load covariate does not prevent this. With Student-t (df = 4), samples with three detected wells stay on the 1:1 line up to 5.3 log10. Remaining shrinkage is at the low end: single-well samples observed below ≈ 1.8 log10 (≈ 1.5 copies per reaction) are pulled up to ≈ 1.8, since their large `sigma` makes one well weakly informative.
 - **Detection**: `hu` (probability a well is not detected) has a group-level intercept correlated with `mu`, so the `mu`–`hu` correlation gives the per-well detection curve.
 - **Noise**: `sigma` (well-to-well SD) depends on `load_obs_c`, each sample's observed mean log10 load of its detected wells (centred at `load_center`), plus an independent sample-level intercept for extra between-sample variation. Log noise is linear in log load, which matches Poisson sampling at low copy numbers (SD ∝ 1/√copies) but has no floor at high loads. An observed covariate is used because a first version, with a `sigma` intercept correlated with `mu`, was degenerate: the narrow normal latent-load distribution shrank high-load samples (e.g. three wells at 5.3 log10 agreeing within 0.01) to ≈ 2.8 log10 and explained them with a huge `sigma`, giving a spurious positive load–noise correlation (+0.58) and a failed within-sample SD check. The covariate is noisy for samples with one detected well, but these carry no information on `sigma`.
 - **Samples with no detected well are left out** by default (`include_all_zero = FALSE`). In eDNA most of them are true absences, not missed detections, and would pile up at the low end of the latent-load distribution. The cost is that detection at the lowest loads is overestimated (samples with low load that happened to give 0/3 wells are missing). Set `include_all_zero = TRUE` for a sensitivity check.
@@ -90,12 +94,14 @@ m0_df %>%
 
 m0_family = hurdle_lognormal()
 
-m0_formula = bf(
-  bd_load ~ 1 +
-    (1 | g | gr(sample, dist = "student")),
+# sample intercepts, shared (correlated) between mu and hu
+# (brms calls the normal "gaussian")
+m0_group = sprintf('(1 | g | gr(sample, dist = "%s"))', if (latent_dist == "normal") "gaussian" else latent_dist)
 
-  hu ~ 1 +
-    (1 | g | gr(sample, dist = "student")),
+m0_formula = bf(
+  as.formula(paste("bd_load ~ 1 +", m0_group)),
+
+  as.formula(paste("hu ~ 1 +", m0_group)),
 
   sigma ~ 1 + load_obs_c +
     (1 | sample)
@@ -112,18 +118,23 @@ m0_priors = c(
   prior(normal(-1, 1), class = "Intercept", dpar = "sigma"),
   prior(normal(0, 1), class = "b", dpar = "sigma"),
 
-  # group-level effects (sd priors are set per dpar; class = "sd" alone covers mu only;
-  # Student-t df keeps the brms default, gamma(2, 0.1))
+  # group-level effects (sd priors are set per dpar; class = "sd" alone covers mu only)
   prior(exponential(1), class = "sd"),
   prior(exponential(1), class = "sd", dpar = "hu"),
   prior(exponential(1), class = "sd", dpar = "sigma"),
   prior(lkj(2), class = "cor")
 )
+
+# Student-t degrees of freedom fixed (not identified with ~3 wells per sample)
+if (latent_dist == "student") {
+  m0_priors = m0_priors +
+    set_prior(sprintf("constant(%s)", student_df), class = "df", group = "sample")
+}
 ```
 
 ### Fit
 
-Fit is saved to `fits/` in the data directory and reloaded unless `refit = TRUE`.
+Fit is saved to `fits/` in the data directory (`m0_qpcr_noise_student.rds` or `m0_qpcr_noise_normal.rds`, by `latent_dist`) and reloaded unless `refit = TRUE`.
 
 ```{r m0-fit}
 #| code-fold: true
@@ -135,14 +146,14 @@ m0 = brm(
   data = m0_df,
   family = m0_family,
   prior = m0_priors,
-  control = list(adapt_delta = 0.98),
+  control = list(adapt_delta = 0.99),
   chains = 4,
   iter = 4000,
   warmup = 2000,
   seed = 1234,
   cores = 4,
   backend = "cmdstanr",
-  file = here(fit_dir, "m0_qpcr_noise"),
+  file = here(fit_dir, paste0("m0_qpcr_noise_", latent_dist)),
   file_refit = if (refit) "always" else "on_change"
 )
 ```
@@ -165,7 +176,7 @@ posterior_summary(m0, variable = "^cor_sample", regex = TRUE) %>%
 
 ### Noise and detection curves
 
-Population-level curves. **Detection**: for a sample with latent log load `mu`, the conditional distribution of its `hu` intercept (bivariate Student-t with `mu`) has mean shifted by $\rho \, sd_{hu} / sd_\mu \, (\mu - \mu_0)$ and scale $sd_{hu}^2 (1 - \rho^2) (\nu + z^2) / (\nu + 1)$, with $z = (\mu - \mu_0) / sd_\mu$; detection averages over this spread (probit approximation to the logistic-normal, as in Model 1, treating the conditional t as normal). **Noise**: median well-to-well SD across samples at a given load, $\exp(\beta_0 + \beta_1 (\text{log10 load} - \text{load\_center}))$, converted to log10.
+Population-level curves. **Detection**: for a sample with latent log load `mu`, the conditional distribution of its `hu` intercept (bivariate Student-t with `mu`; normal if `latent_dist = "normal"`, where the scale factor below is 1) has mean shifted by $\rho \, sd_{hu} / sd_\mu \, (\mu - \mu_0)$ and scale $sd_{hu}^2 (1 - \rho^2) (\nu + z^2) / (\nu + 1)$, with $z = (\mu - \mu_0) / sd_\mu$; detection averages over this spread (probit approximation to the logistic-normal, as in Model 1, treating the conditional t as normal). **Noise**: median well-to-well SD across samples at a given load, $\exp(\beta_0 + \beta_1 (\text{log10 load} - \text{load\_center}))$, converted to log10.
 
 ```{r m0-curves-calc}
 #| code-fold: true
@@ -181,13 +192,15 @@ m0_pop = as_draws_df(m0) %>%
             sd_mu = sd_sample__Intercept,
             sd_hu = sd_sample__hu_Intercept,
             rho_hu = cor_sample__Intercept__hu_Intercept,
-            nu = df_sample)
+            # fixed df; Inf = normal intercepts
+            nu = if (latent_dist == "student") student_df else Inf)
 
 m0_curve_draws = expand_grid(m0_pop, log10_load = seq(1, 5, by = 0.05)) %>%
   mutate(mu = log10_load * log(10),
          z = (mu - mu_0) / sd_mu,
          hu_mean = hu_0 + rho_hu * sd_hu * z,
-         hu_var = sd_hu^2 * (1 - rho_hu^2) * (nu + z^2) / (nu + 1),
+         # conditional t scale factor (nu + z^2) / (nu + 1); 1 for normal intercepts
+         hu_var = sd_hu^2 * (1 - rho_hu^2) * if_else(is.infinite(nu), 1, (nu + z^2) / (nu + 1)),
          p_detect = 1 - plogis(hu_mean / sqrt(1 + pi * hu_var / 8)),
          # ln-scale SD -> SD of log10(load)
          sigma_log10 = exp(sigma_0 + sigma_slope * (log10_load - load_center)) / log(10))
@@ -355,9 +368,34 @@ ggplot(ppc_bins_rep, aes(group, med)) +
   theme(legend.position = "bottom")
 ```
 
+### Shrinkage of latent loads
+
+Each sample's estimated latent load (posterior median) against its observed mean log10 load of detected wells, by number of detected wells. Points on the 1:1 line are not shrunk. Samples with one detected well carry little information on their own load and are pulled toward the centre of the latent-load distribution (dotted line); strong upward shrinkage at low loads overpredicts the median positive load. High-load samples with several agreeing wells should stay on the line.
+
+```{r m0-shrinkage}
+#| code-fold: true
+#| code-summary: "Show shrinkage check code"
+#| fig-width: 6
+#| fig-height: 4.5
+
+m0_samples %>%
+  filter(n_detected > 0) %>%
+  mutate(load_obs = load_obs_c + load_center,
+         n_detected = factor(n_detected)) %>%
+  ggplot(aes(load_obs, log10_load, colour = n_detected)) +
+  geom_abline(linetype = "dashed", colour = "grey50") +
+  geom_hline(yintercept = median(m0_pop$mu_0) / log(10), linetype = "dotted", colour = "grey50") +
+  geom_point(alpha = 0.6) +
+  labs(x = "observed mean log10(Bd load), detected wells", y = "latent log10(Bd load), posterior median",
+       colour = "detected wells",
+       title = paste("latent intercepts:", latent_dist)) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
 ### Export for Model 2
 
-Posterior draws and summaries of population-level effects, group-level SDs, and correlations, plus the noise and detection curves (per draw and summarised) and the load range supported by data, saved to `fits/m0_qpcr_noise_export.rds`.
+Posterior draws and summaries of population-level effects, group-level SDs, and correlations, plus the noise and detection curves (per draw and summarised) and the load range supported by data, saved to `fits/m0_qpcr_noise_export.rds`. The export is overwritten by whichever `latent_dist` was rendered last (recorded in `settings`).
 
 ```{r m0-export}
 #| code-fold: true
@@ -377,7 +415,9 @@ m0_export = list(summary = m0_summary,
                  data_range_log10_load = m0_data_range,
                  load_factor = edna_load_factor,
                  load_center = load_center,
-                 settings = list(include_tissue = include_tissue, include_all_zero = include_all_zero),
+                 settings = list(include_tissue = include_tissue, include_all_zero = include_all_zero,
+                                 latent_dist = latent_dist,
+                                 student_df = if (latent_dist == "student") student_df else NA),
                  formula = m0_formula,
                  import_date = edna_import_date,
                  export_date = Sys.Date())
