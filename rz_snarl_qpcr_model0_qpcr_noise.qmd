@@ -38,15 +38,18 @@ refit = FALSE
 include_tissue = TRUE
 # include samples with no detected well (mostly true absence in eDNA; see Model structure)
 include_all_zero = FALSE
+
+# centre of the sigma load covariate (log10 Bd load per swab, Qiagen scale)
+load_center = 2.5
 ```
 
 ## Model 0: qPCR technical noise
 
 Per-well noise and detection as a function of load, as a brms hurdle-lognormal model (cmdstanr backend), following Model 1.
 
-- **Latent load**: each sample (one extract, on its latest run) has a group-level intercept in `mu`, its true (log) load.
+- **Latent load**: each sample (one extract, on its latest run) has a group-level intercept in `mu`, its true (log) load. Group-level intercepts are Student-t, so the few high-load samples (tissue, some Sierra Nevada eDNA) sit at their own loads instead of being shrunk into the eDNA bulk just above the detection limit.
 - **Detection**: `hu` (probability a well is not detected) has a group-level intercept correlated with `mu`, so the `mu`–`hu` correlation gives the per-well detection curve.
-- **Noise**: `sigma` (well-to-well SD) also has a group-level intercept correlated with `mu`, so the `mu`–`sigma` correlation gives the noise-vs-load curve. This makes log noise linear in log load, which matches Poisson sampling at low copy numbers (SD ∝ 1/√copies) but has no floor at high loads.
+- **Noise**: `sigma` (well-to-well SD) depends on `load_obs_c`, each sample's observed mean log10 load of its detected wells (centred at `load_center`), plus an independent sample-level intercept for extra between-sample variation. Log noise is linear in log load, which matches Poisson sampling at low copy numbers (SD ∝ 1/√copies) but has no floor at high loads. An observed covariate is used because a first version, with a `sigma` intercept correlated with `mu`, was degenerate: the narrow normal latent-load distribution shrank high-load samples (e.g. three wells at 5.3 log10 agreeing within 0.01) to ≈ 2.8 log10 and explained them with a huge `sigma`, giving a spurious positive load–noise correlation (+0.58) and a failed within-sample SD check. The covariate is noisy for samples with one detected well, but these carry no information on `sigma`.
 - **Samples with no detected well are left out** by default (`include_all_zero = FALSE`). In eDNA most of them are true absences, not missed detections, and would pile up at the low end of the latent-load distribution. The cost is that detection at the lowest loads is overestimated (samples with low load that happened to give 0/3 wells are missing). Set `include_all_zero = TRUE` for a sensitivity check.
 
 `mu` and `sigma` are on the natural-log scale of Bd load (ITS1 copies per swab, Qiagen scale: 40 × copies per reaction); results are converted to log10 for plots, on both scales.
@@ -61,8 +64,11 @@ m0_df = edna_clean %>%
   filter(include_tissue | !is_tissue) %>%
   group_by(sample) %>%
   filter(include_all_zero | any(detected)) %>%
+  mutate(load_obs = if_else(any(detected), mean(log10(bd_load[detected])), NA_real_)) %>%
   ungroup() %>%
-  mutate(sample_type = if_else(is_tissue, "tissue", "eDNA"))
+  mutate(sample_type = if_else(is_tissue, "tissue", "eDNA"),
+         # samples with no detected well (include_all_zero) get the centre; sigma does not enter their likelihood
+         load_obs_c = coalesce(load_obs - load_center, 0))
 
 m0_df %>%
   group_by(sample_type) %>%
@@ -86,13 +92,13 @@ m0_family = hurdle_lognormal()
 
 m0_formula = bf(
   bd_load ~ 1 +
-    (1 | g | sample),
+    (1 | g | gr(sample, dist = "student")),
 
   hu ~ 1 +
-    (1 | g | sample),
+    (1 | g | gr(sample, dist = "student")),
 
-  sigma ~ 1 +
-    (1 | g | sample)
+  sigma ~ 1 + load_obs_c +
+    (1 | sample)
 )
 
 m0_priors = c(
@@ -102,10 +108,12 @@ m0_priors = c(
   # hu
   prior(normal(0, 2), class = "Intercept", dpar = "hu"),
 
-  # sigma (log of ln-scale SD; -1 ~ 0.16 log10)
+  # sigma (log of ln-scale SD; -1 ~ 0.16 log10); slope per log10 load (Poisson: -0.5 * ln(10) ~ -1.15)
   prior(normal(-1, 1), class = "Intercept", dpar = "sigma"),
+  prior(normal(0, 1), class = "b", dpar = "sigma"),
 
-  # group-level effects (sd priors are set per dpar; class = "sd" alone covers mu only)
+  # group-level effects (sd priors are set per dpar; class = "sd" alone covers mu only;
+  # Student-t df keeps the brms default, gamma(2, 0.1))
   prior(exponential(1), class = "sd"),
   prior(exponential(1), class = "sd", dpar = "hu"),
   prior(exponential(1), class = "sd", dpar = "sigma"),
@@ -129,8 +137,8 @@ m0 = brm(
   prior = m0_priors,
   control = list(adapt_delta = 0.98),
   chains = 4,
-  iter = 2000,
-  warmup = 1000,
+  iter = 4000,
+  warmup = 2000,
   seed = 1234,
   cores = 4,
   backend = "cmdstanr",
@@ -147,7 +155,7 @@ m0 = brm(
 
 summary(m0)
 
-# group-level correlations: mu-hu (detection vs load), mu-sigma (noise vs load)
+# group-level correlation: mu-hu (detection vs load)
 posterior_summary(m0, variable = "^cor_sample", regex = TRUE) %>%
   as.data.frame() %>%
   rownames_to_column("term") %>%
@@ -157,7 +165,7 @@ posterior_summary(m0, variable = "^cor_sample", regex = TRUE) %>%
 
 ### Noise and detection curves
 
-Population-level curves implied by the correlated group-level intercepts: for a sample with latent log load `mu`, the conditional distribution of its `hu` and log `sigma` intercepts is normal, with mean shifted by $\rho \, sd / sd_\mu \, (\mu - \mu_0)$ and variance $sd^2 (1 - \rho^2)$. Noise is the conditional median SD; detection averages over the conditional spread (probit approximation to the logistic-normal, as in Model 1).
+Population-level curves. **Detection**: for a sample with latent log load `mu`, the conditional distribution of its `hu` intercept (bivariate Student-t with `mu`) has mean shifted by $\rho \, sd_{hu} / sd_\mu \, (\mu - \mu_0)$ and scale $sd_{hu}^2 (1 - \rho^2) (\nu + z^2) / (\nu + 1)$, with $z = (\mu - \mu_0) / sd_\mu$; detection averages over this spread (probit approximation to the logistic-normal, as in Model 1, treating the conditional t as normal). **Noise**: median well-to-well SD across samples at a given load, $\exp(\beta_0 + \beta_1 (\text{log10 load} - \text{load\_center}))$, converted to log10.
 
 ```{r m0-curves-calc}
 #| code-fold: true
@@ -169,19 +177,20 @@ m0_pop = as_draws_df(m0) %>%
             mu_0 = b_Intercept,
             hu_0 = b_hu_Intercept,
             sigma_0 = b_sigma_Intercept,
+            sigma_slope = b_sigma_load_obs_c,
             sd_mu = sd_sample__Intercept,
             sd_hu = sd_sample__hu_Intercept,
-            sd_sigma = sd_sample__sigma_Intercept,
             rho_hu = cor_sample__Intercept__hu_Intercept,
-            rho_sigma = cor_sample__Intercept__sigma_Intercept)
+            nu = df_sample)
 
 m0_curve_draws = expand_grid(m0_pop, log10_load = seq(1, 5, by = 0.05)) %>%
   mutate(mu = log10_load * log(10),
-         hu_mean = hu_0 + rho_hu * sd_hu / sd_mu * (mu - mu_0),
-         hu_var = sd_hu^2 * (1 - rho_hu^2),
+         z = (mu - mu_0) / sd_mu,
+         hu_mean = hu_0 + rho_hu * sd_hu * z,
+         hu_var = sd_hu^2 * (1 - rho_hu^2) * (nu + z^2) / (nu + 1),
          p_detect = 1 - plogis(hu_mean / sqrt(1 + pi * hu_var / 8)),
          # ln-scale SD -> SD of log10(load)
-         sigma_log10 = exp(sigma_0 + rho_sigma * sd_sigma / sd_mu * (mu - mu_0)) / log(10))
+         sigma_log10 = exp(sigma_0 + sigma_slope * (log10_load - load_center)) / log(10))
 
 m0_curves = m0_curve_draws %>%
   pivot_longer(c(p_detect, sigma_log10), names_to = "curve") %>%
@@ -194,7 +203,7 @@ m0_curves = m0_curve_draws %>%
 
 # sample-level estimates
 m0_samples = m0_df %>%
-  group_by(sample, sample_type) %>%
+  group_by(sample, sample_type, load_obs_c) %>%
   summarise(n_wells = n(),
             n_detected = sum(detected),
             obs_sd_log10 = if_else(n_detected > 1, sd(log10(bd_load[detected])), NA_real_),
@@ -231,8 +240,8 @@ experiment_positive = snarl_clean %>%
 copies_axis = sec_axis(~ . - log10(edna_load_factor), name = "log10(Bd copies per reaction)")
 
 extrapolation = list(
-  annotate("rect", xmin = -Inf, xmax = m0_data_range[["lo"]], ymin = -Inf, ymax = Inf, alpha = 0.1),
-  annotate("rect", xmin = m0_data_range[["hi"]], xmax = Inf, ymin = -Inf, ymax = Inf, alpha = 0.1)
+  annotate("rect", xmin = -Inf, xmax = m0_data_range[["lo.5%"]], ymin = -Inf, ymax = Inf, alpha = 0.1),
+  annotate("rect", xmin = m0_data_range[["hi.95%"]], xmax = Inf, ymin = -Inf, ymax = Inf, alpha = 0.1)
 )
 
 curve_layers = function(which) {
@@ -281,7 +290,7 @@ Curve values at selected loads (posterior median, 90% interval).
 m0_curves %>%
   filter(round(log10_load, 2) %in% c(1.5, 2, 2.5, 3, 3.5, 4)) %>%
   mutate(value = sprintf("%.2f (%.2f, %.2f)", med, lo, hi),
-         extrapolated = log10_load < m0_data_range[["lo"]] | log10_load > m0_data_range[["hi"]]) %>%
+         extrapolated = log10_load < m0_data_range[["lo.5%"]] | log10_load > m0_data_range[["hi.95%"]]) %>%
   select(curve, log10_load, log10_copies, value, extrapolated) %>%
   pivot_wider(names_from = curve, values_from = value) %>%
   rename(`log10 load per swab` = log10_load,
@@ -294,7 +303,7 @@ m0_curves %>%
 
 ### Posterior predictive checks
 
-Share of wells detected, median positive log10 load, and pooled within-sample SD of log10 load among detected wells (samples with ≥ 2 detected wells).
+Share of wells detected, median positive log10 load, and pooled within-sample SD of log10 load among detected wells (samples with ≥ 2 detected wells), overall and by the sample's observed load.
 
 ```{r m0-ppc}
 #| code-fold: true
@@ -304,23 +313,46 @@ Share of wells detected, median positive log10 load, and pooled within-sample SD
 
 m0_yrep = posterior_predict(m0, ndraws = 500)
 
-pooled_within_sd = function(y) {
-  tibble(sample = m0_df$sample, y = y) %>%
+# pooled within-sample SD of log10 load among detected wells, optionally by a grouping of rows
+pooled_within_sd = function(y, group = "all") {
+  tibble(sample = m0_df$sample, group = group, y = y) %>%
     filter(y > 0) %>%
     group_by(sample) %>%
     filter(n() >= 2) %>%
     mutate(dev = log10(y) - mean(log10(y))) %>%
-    ungroup() %>%
-    summarise(sd = sqrt(sum(dev^2) / (n() - n_distinct(sample)))) %>%
-    pull(sd)
+    group_by(group) %>%
+    summarise(sd = sqrt(sum(dev^2) / (n() - n_distinct(sample))), .groups = "drop")
 }
 
 (ppc_stat(y = m0_df$bd_load, yrep = m0_yrep, stat = function(y) mean(y > 0)) +
     labs(x = "share of wells detected")) +
   (ppc_stat(y = m0_df$bd_load, yrep = m0_yrep, stat = function(y) median(log10(y[y > 0]))) +
      labs(x = "median log10(Bd load), detected wells")) +
-  (ppc_stat(y = m0_df$bd_load, yrep = m0_yrep, stat = pooled_within_sd) +
+  (ppc_stat(y = m0_df$bd_load, yrep = m0_yrep, stat = function(y) pooled_within_sd(y)$sd) +
      labs(x = "pooled within-sample SD (log10)"))
+```
+
+```{r m0-ppc-by-load}
+#| code-fold: true
+#| code-summary: "Show PPC by load code"
+#| fig-width: 6
+#| fig-height: 3.5
+
+load_bin = cut(m0_df$load_obs, c(-Inf, 2, 2.5, 3, Inf))
+
+ppc_bins_rep = map_dfr(seq_len(nrow(m0_yrep)), ~ pooled_within_sd(m0_yrep[.x, ], load_bin)) %>%
+  group_by(group) %>%
+  summarise(med = median(sd), lo = quantile(sd, 0.05), hi = quantile(sd, 0.95), .groups = "drop")
+
+ppc_bins_obs = pooled_within_sd(m0_df$bd_load, load_bin)
+
+ggplot(ppc_bins_rep, aes(group, med)) +
+  geom_pointrange(aes(ymin = lo, ymax = hi, colour = "replicated (median, 90%)")) +
+  geom_point(data = ppc_bins_obs, aes(group, sd, colour = "observed"), size = 3, shape = 4, stroke = 1.5) +
+  scale_colour_manual(values = c("observed" = "black", "replicated (median, 90%)" = "grey50")) +
+  labs(x = "observed sample load (log10 per swab)", y = "pooled within-sample SD (log10)", colour = NULL) +
+  theme_bw() +
+  theme(legend.position = "bottom")
 ```
 
 ### Export for Model 2
@@ -344,6 +376,7 @@ m0_export = list(summary = m0_summary,
                  curve_draws = m0_curve_draws %>% select(draw, log10_load, p_detect, sigma_log10),
                  data_range_log10_load = m0_data_range,
                  load_factor = edna_load_factor,
+                 load_center = load_center,
                  settings = list(include_tissue = include_tissue, include_all_zero = include_all_zero),
                  formula = m0_formula,
                  import_date = edna_import_date,
