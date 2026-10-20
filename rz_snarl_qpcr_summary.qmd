@@ -294,7 +294,7 @@ Because each frog is measured by both labs, the lab comparisons are made **withi
 
 **PrepMan yields fewer copies than Qiagen**
 
-On the same frogs, **PrepMan extracts give `r fmt_ci(-d_prepman)` log10 lower loads than Qiagen**, about **`r sprintf("%.1f", 10^median(-d_prepman))`× fewer copies**. PrepMan also produces **more non-detects**.
+On the same frogs, **PrepMan extracts give `r fmt_ci(-d_prepman)` log10 lower loads than Qiagen**, about **`r sprintf("%.2f", 10^median(-d_prepman))`× fewer copies**. PrepMan also produces **more non-detects**.
 
 ## qPCR
 
